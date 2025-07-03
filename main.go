@@ -28,7 +28,7 @@ func main() {
 	if len(os.Args) != 4 ||
 		(os.Args[1] != "host" && os.Args[1] != "guest") {
 		fmt.Fprintf(os.Stderr,
-			"example usage: ./host-golang [host,guest] https://meetupstation.com \"secret host room id\"\n")
+			"example usage: ./meetupstation-pion [host,guest] https://meetupstation.com \"secret host room id\"\n")
 		return
 	}
 
@@ -66,6 +66,8 @@ func main() {
 		peerIndex, connectedChannel := newPeerConnection(&peers, &mutex)
 
 		var localSessionDescription webrtc.SessionDescription
+
+		setupTracksAndDataHandlers(&peers, peerIndex)
 
 		if peerType == PeerTypeHost {
 			for {
@@ -150,8 +152,6 @@ func main() {
 				peerIndex,
 				localSessionDescription)
 
-			setupTracksAndDataHandlers(&peers, peerIndex)
-
 			peers[peerIndex].peerConnection.SetRemoteDescription(guestAnswer)
 		} else {
 			// var peerLocalSessionDescription *webrtc.SessionDescription
@@ -162,8 +162,6 @@ func main() {
 				hostId,
 				localSessionDescription,
 				peerIndex)
-
-			setupTracksAndDataHandlers(&peers, peerIndex)
 		}
 
 		fmt.Fprintf(os.Stderr, "conn %d: joined: waiting for the ice connection\n", peerIndex)
