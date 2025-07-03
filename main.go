@@ -140,27 +140,27 @@ func main() {
 		fmt.Fprintf(os.Stderr, "conn %d: all ice candidates are received from stun server\n", peerIndex)
 
 		if peerType == PeerTypeHost {
-			// var peerLocalSessionDescription *webrtc.SessionDescription
-			// mutex.Lock()
-			// peerLocalSessionDescription = peers[peerIndex].peerConnection.LocalDescription()
-			// mutex.Unlock()
+			var peerLocalSessionDescription *webrtc.SessionDescription
+			mutex.Lock()
+			peerLocalSessionDescription = peers[peerIndex].peerConnection.LocalDescription()
+			mutex.Unlock()
 
 			fmt.Fprintf(os.Stderr, "conn %d: waiting for the peer to join\n", peerIndex)
 
 			guestAnswer := signalWaitForGuest(signalServer,
 				hostId,
 				peerIndex,
-				localSessionDescription)
+				*peerLocalSessionDescription)
 
 			peers[peerIndex].peerConnection.SetRemoteDescription(guestAnswer)
 		} else {
-			// var peerLocalSessionDescription *webrtc.SessionDescription
-			// mutex.Lock()
-			// peerLocalSessionDescription = peers[peerIndex].peerConnection.LocalDescription()
-			// mutex.Unlock()
+			var peerLocalSessionDescription *webrtc.SessionDescription
+			mutex.Lock()
+			peerLocalSessionDescription = peers[peerIndex].peerConnection.LocalDescription()
+			mutex.Unlock()
 			signalGuestSetup(signalServer,
 				hostId,
-				localSessionDescription,
+				*peerLocalSessionDescription,
 				peerIndex)
 		}
 
