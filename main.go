@@ -63,7 +63,7 @@ func main() {
 
 	for {
 		var err error
-		peerIndex, connectedChannel, disconnectedChannel := newPeerConnection(&peers, &mutex)
+		peerIndex, connectedChannel := newPeerConnection(&peers, &mutex)
 
 		var localSessionDescription webrtc.SessionDescription
 
@@ -167,12 +167,16 @@ func main() {
 		}
 
 		fmt.Fprintf(os.Stderr, "conn %d: joined: waiting for the ice connection\n", peerIndex)
-		<-connectedChannel
+		connected := <-connectedChannel
 
-		fmt.Fprintf(os.Stderr, "conn %d: ice connected\n", peerIndex)
+		if connected {
+			fmt.Fprintf(os.Stderr, "conn %d: ice connected\n", peerIndex)
+			if peerType == PeerTypeGuest {
+				connected = <-connectedChannel
+			}
+		}
 
-		if peerType == PeerTypeGuest {
-			<-disconnectedChannel
+		if !connected {
 			fmt.Fprintf(os.Stderr, "conn %d: ice disconnected\n", peerIndex)
 		}
 	}

@@ -114,8 +114,7 @@ func startPeerConnection() (
 func newPeerConnection(peers *[]Peer,
 	mutex *sync.Mutex) (
 	int,
-	chan struct{},
-	chan struct{}) {
+	chan bool) {
 	for {
 		peerConnection,
 			localVideoTrack,
@@ -141,8 +140,7 @@ func newPeerConnection(peers *[]Peer,
 		})
 		mutex.Unlock()
 
-		connectedChannel := make(chan struct{})
-		disconnectedChannel := make(chan struct{})
+		connectedChannel := make(chan bool)
 
 		peerConnection.OnICEConnectionStateChange(
 			func(connectionState webrtc.ICEConnectionState) {
@@ -171,7 +169,7 @@ func newPeerConnection(peers *[]Peer,
 					connectionState.String())
 
 				if connectionState == webrtc.ICEConnectionStateConnected {
-					close(connectedChannel)
+					connectedChannel <- true
 				}
 				if connectionState == webrtc.ICEConnectionStateFailed ||
 					connectionState == webrtc.ICEConnectionStateDisconnected ||
@@ -179,14 +177,15 @@ func newPeerConnection(peers *[]Peer,
 
 					mutex.Lock()
 					if (*peers)[peerIndex].peerConnection != nil {
-						close(disconnectedChannel)
+						connectedChannel <- false
+						close(connectedChannel)
 					}
 					(*peers)[peerIndex].Close(peerIndex)
 					mutex.Unlock()
 				}
 			})
 
-		return len(*peers) - 1, connectedChannel, disconnectedChannel
+		return len(*peers) - 1, connectedChannel
 	}
 }
 
