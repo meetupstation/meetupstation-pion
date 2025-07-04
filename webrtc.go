@@ -146,18 +146,18 @@ func newPeerConnection(peers *[]Peer,
 			func(connectionState webrtc.ICEConnectionState) {
 				peerIndex := 0
 
-				mutex.Lock()
+				// mutex.Lock()
 
 				for {
 					if peerIndex == len(*peers) {
 						fmt.Fprintf(os.Stderr,
 							"conn ?: state - %s\n",
 							connectionState.String())
-						mutex.Unlock()
+						// mutex.Unlock()
 						return
 					}
 					if (*peers)[peerIndex].peerConnection == peerConnection {
-						mutex.Unlock()
+						// mutex.Unlock()
 						break
 					}
 					peerIndex++
@@ -175,13 +175,13 @@ func newPeerConnection(peers *[]Peer,
 					connectionState == webrtc.ICEConnectionStateDisconnected ||
 					connectionState == webrtc.ICEConnectionStateClosed {
 
-					mutex.Lock()
+					// mutex.Lock()
 					if (*peers)[peerIndex].peerConnection != nil {
 						connectedChannel <- false
 						close(connectedChannel)
 					}
 					(*peers)[peerIndex].Close(peerIndex)
-					mutex.Unlock()
+					// mutex.Unlock()
 				}
 			})
 
