@@ -63,12 +63,17 @@ func main() {
 	go streamLocalTrack(&peers, MediaTypeVideo, 4002)
 
 	for {
+		fmt.Fprintf(os.Stderr, "starting a new peer connection...\n")
+
 		var err error
 		peerIndex, connectedChannel := newPeerConnection(&peers, &mutex)
 
 		var localSessionDescription webrtc.SessionDescription
 
+		mutex.Lock()
+		fmt.Fprintf(os.Stderr, "setting up tracks and data handlers: %d\n", peerIndex)
 		setupTracksAndDataHandlers(&peers, peerIndex)
+		mutex.Unlock()
 
 		if peerType == PeerTypeHost {
 			for {
@@ -154,7 +159,9 @@ func main() {
 				peerIndex,
 				*peerLocalSessionDescription)
 
+			mutex.Lock()
 			peers[peerIndex].peerConnection.SetRemoteDescription(guestAnswer)
+			mutex.Unlock()
 		} else {
 			signalGuestSetup(signalServer,
 				hostId,
@@ -178,6 +185,9 @@ func main() {
 			}
 		case <-time.After(30 * time.Second):
 			fmt.Fprintf(os.Stderr, "conn %d: timeout waiting for ice event\n", peerIndex)
+			mutex.Lock()
+			peers[peerIndex].Close(peerIndex)
+			mutex.Unlock()
 		}
 	}
 }
