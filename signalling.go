@@ -244,18 +244,19 @@ func signalWaitForGuest(signalServer string,
 				return guestAnswer
 			}
 
+			fmt.Fprintf(os.Stderr,
+				"conn %d: the guest has not signalled yet\n",
+				peerIndex)
 			time.Sleep(1 * time.Second)
 		} else {
 			fmt.Fprintf(os.Stderr,
-				"conn %d: while getting guest information with signalling server: %s\n",
-				peerIndex,
-				"response status")
+				"conn %d: first need to create the host\n",
+				peerIndex)
 
 			signalHostSetup(signalServer,
 				hostId,
 				peerLocalSessionDescription,
 				peerIndex)
-			continue
 		}
 	}
 }

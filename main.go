@@ -71,7 +71,7 @@ func main() {
 		var localSessionDescription webrtc.SessionDescription
 
 		mutex.Lock()
-		fmt.Fprintf(os.Stderr, "setting up tracks and data handlers: %d\n", peerIndex)
+		fmt.Fprintf(os.Stderr, "conn %d: setting up tracks and data handlers\n", peerIndex)
 		setupTracksAndDataHandlers(&peers, peerIndex)
 		mutex.Unlock()
 
@@ -152,7 +152,7 @@ func main() {
 
 		if peerType == PeerTypeHost {
 
-			fmt.Fprintf(os.Stderr, "conn %d: waiting for the peer to join\n", peerIndex)
+			fmt.Fprintf(os.Stderr, "conn %d: waiting for the signalling settlement\n", peerIndex)
 
 			guestAnswer := signalWaitForGuest(signalServer,
 				hostId,
@@ -169,7 +169,7 @@ func main() {
 				peerIndex)
 		}
 
-		fmt.Fprintf(os.Stderr, "conn %d: joined: waiting for the ice connection\n", peerIndex)
+		fmt.Fprintf(os.Stderr, "conn %d: signalling settled: waiting for the ice connection\n", peerIndex)
 
 		select {
 		case connected := <-connectedChannel:
