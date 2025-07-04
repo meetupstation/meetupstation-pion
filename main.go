@@ -159,9 +159,15 @@ func main() {
 				peerIndex,
 				*peerLocalSessionDescription)
 
+			// debug logging
+			fmt.Fprintf(os.Stderr, "conn %d: setting the remote description\n", peerIndex)
+
 			mutex.Lock()
 			peers[peerIndex].peerConnection.SetRemoteDescription(guestAnswer)
 			mutex.Unlock()
+
+			// debug logging
+			fmt.Fprintf(os.Stderr, "conn %d: have set the remote description\n", peerIndex)
 		} else {
 			signalGuestSetup(signalServer,
 				hostId,

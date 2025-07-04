@@ -231,13 +231,27 @@ func signalWaitForGuest(signalServer string,
 		var guestDescriptionObject map[string]string
 		allOK := guestSignal.StatusCode == http.StatusOK
 		if allOK {
+			// debug logging
+			fmt.Fprintf(os.Stderr,
+				"conn %d: decoding the guest signal!\n",
+				peerIndex)
 			json.NewDecoder(guestSignal.Body).Decode(&guestDescriptionObject)
+
+			// debug logging
+			fmt.Fprintf(os.Stderr,
+				"conn %d: have decoded the guest signal!\n",
+				peerIndex)
 		}
 		guestSignal.Body.Close()
 
 		if allOK {
 			guestDescription := guestDescriptionObject["guestDescription"]
 			if guestDescription != "" {
+				// debug logging
+				fmt.Fprintf(os.Stderr,
+					"conn %d: the guest has apparently signalled!\n",
+					peerIndex)
+
 				guestAnswer := webrtc.SessionDescription{}
 				decode(guestDescription, &guestAnswer)
 
