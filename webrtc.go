@@ -89,7 +89,7 @@ func startPeerConnection() (
 		ID:         &dataChannelID,
 	}
 	dataChannel, err := peerConnection.CreateDataChannel(
-		"meetrostation", &dataChannelInit)
+		"meetupstation", &dataChannelInit)
 	if err != nil {
 		peerConnection.Close()
 		return nil, nil, nil, nil, err
