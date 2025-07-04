@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/pion/webrtc/v4"
 )
@@ -162,17 +163,21 @@ func main() {
 		}
 
 		fmt.Fprintf(os.Stderr, "conn %d: joined: waiting for the ice connection\n", peerIndex)
-		connected := <-connectedChannel
 
-		if connected {
-			fmt.Fprintf(os.Stderr, "conn %d: ice connected\n", peerIndex)
-			if peerType == PeerTypeGuest {
-				connected = <-connectedChannel
+		select {
+		case connected := <-connectedChannel:
+			if connected {
+				fmt.Fprintf(os.Stderr, "conn %d: ice connected\n", peerIndex)
+				if peerType == PeerTypeGuest {
+					connected = <-connectedChannel
+				}
 			}
-		}
 
-		if !connected {
-			fmt.Fprintf(os.Stderr, "conn %d: ice disconnected\n", peerIndex)
+			if !connected {
+				fmt.Fprintf(os.Stderr, "conn %d: ice disconnected\n", peerIndex)
+			}
+		case <-time.After(30 * time.Second):
+			fmt.Fprintf(os.Stderr, "conn %d: timeout waiting for ice event\n", peerIndex)
 		}
 	}
 }
