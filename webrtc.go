@@ -3,10 +3,8 @@ package main
 import (
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
-	"sync"
 
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
@@ -111,92 +109,7 @@ func startPeerConnection() (
 		nil
 }
 
-func newPeerConnection(peers *[]Peer,
-	mutex *sync.Mutex) (
-	int,
-	chan bool) {
-	for {
-		peerConnection,
-			localVideoTrack,
-			localAudioTrack,
-			dataChannel,
-			err := startPeerConnection()
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"while setting up peer connection. will retry: %s\n",
-				err)
-			continue
-		}
-
-		mutex.Lock()
-		*peers = append(*peers, Peer{
-			peerConnection:        peerConnection,
-			localVideoTrack:       localVideoTrack,
-			localAudioTrack:       localAudioTrack,
-			dataChannel:           dataChannel,
-			remoteVideoConnection: nil,
-			remoteAudioConnection: nil,
-		})
-		mutex.Unlock()
-
-		connectedChannel := make(chan bool)
-
-		peerConnection.OnICEConnectionStateChange(
-			func(connectionState webrtc.ICEConnectionState) {
-				peerIndex := 0
-
-				// mutex.Lock()
-
-				for {
-					if peerIndex == len(*peers) {
-						fmt.Fprintf(os.Stderr,
-							"conn ?: state - %s\n",
-							connectionState.String())
-						// mutex.Unlock()
-						return
-					}
-					if (*peers)[peerIndex].peerConnection == peerConnection {
-						// mutex.Unlock()
-						break
-					}
-					peerIndex++
-				}
-
-				fmt.Fprintf(os.Stderr,
-					"conn %d: state - %s\n",
-					peerIndex,
-					connectionState.String())
-
-				if connectionState == webrtc.ICEConnectionStateConnected {
-					connectedChannel <- true
-				}
-				if connectionState == webrtc.ICEConnectionStateFailed ||
-					connectionState == webrtc.ICEConnectionStateDisconnected ||
-					connectionState == webrtc.ICEConnectionStateClosed {
-
-					// mutex.Lock()
-					if (*peers)[peerIndex].peerConnection != nil {
-						connectedChannel <- false
-						close(connectedChannel)
-					}
-					(*peers)[peerIndex].Close(peerIndex)
-					// mutex.Unlock()
-				}
-			})
-
-		return len(*peers) - 1, connectedChannel
-	}
-}
-
-func setupTracksAndDataHandlers(peers *[]Peer, peerIndex int) {
-	for index, peer := range *peers {
-		if index == peerIndex {
-			continue
-		}
-
-		peer.CloseRemoteConnections(index)
-	}
+func setupTracksAndDataHandlers(peer Peer, peerConnectionId int) {
 
 	var localAddress *net.UDPAddr
 	var err error
@@ -212,11 +125,11 @@ func setupTracksAndDataHandlers(peers *[]Peer, peerIndex int) {
 		panic(fmt.Sprintf("logic: net.ResolveUDPAddr for remote audio - %s", err))
 	}
 
-	(*peers)[peerIndex].remoteAudioConnection, err = net.DialUDP("udp", localAddress, remoteAddressAudio)
+	peer.remoteAudioConnection, err = net.DialUDP("udp", localAddress, remoteAddressAudio)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"conn %d: audio - net.DialUDP - %s\n",
-			peerIndex,
+			peerConnectionId,
 			err)
 	}
 
@@ -226,83 +139,87 @@ func setupTracksAndDataHandlers(peers *[]Peer, peerIndex int) {
 		panic(fmt.Sprintf("logic: net.ResolveUDPAddr for remote video - %s", err))
 	}
 
-	(*peers)[peerIndex].remoteVideoConnection, err = net.DialUDP("udp", localAddress, remoteAddressVideo)
+	peer.remoteVideoConnection, err = net.DialUDP("udp", localAddress, remoteAddressVideo)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"conn %d: video - net.DialUDP - %s\n",
-			peerIndex,
+			peerConnectionId,
 			err)
 	}
 
-	(*peers)[peerIndex].peerConnection.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		connection, payloadType := func(track *webrtc.TrackRemote) (*net.UDPConn, uint8) {
-			if track.Kind().String() == "video" {
-				return (*peers)[peerIndex].remoteVideoConnection, 96
-			} else {
-				return (*peers)[peerIndex].remoteAudioConnection, 111
-			}
-		}(track)
+	peer.peerConnection.OnTrack(
+		func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+			connection, payloadType :=
+				func(track *webrtc.TrackRemote) (*net.UDPConn, uint8) {
+					if track.Kind().String() == "video" {
+						return peer.remoteVideoConnection, 96
+					} else {
+						return peer.remoteAudioConnection, 111
+					}
+				}(track)
 
-		buf := make([]byte, 1500)
-		rtpPacket := &rtp.Packet{}
-		for {
-			if (*peers)[peerIndex].IsNull() {
-				break
-			}
-
-			n, _, err := track.Read(buf)
-			if err != nil {
-				fmt.Fprintf(os.Stderr,
-					"conn %d: track read - %s\n",
-					peerIndex,
-					err)
-				break
-			}
-
-			err = rtpPacket.Unmarshal(buf[:n])
-			if err != nil {
-				fmt.Fprintf(os.Stderr,
-					"conn %d: rtp packet unmarshal - %s\n",
-					peerIndex,
-					err)
-			}
-			rtpPacket.PayloadType = payloadType
-
-			n, err = rtpPacket.MarshalTo(buf)
-			if err != nil {
-				fmt.Fprintf(os.Stderr,
-					"conn %d: rtp packet marshal - %s\n",
-					peerIndex,
-					err)
-			}
-
-			_, err = connection.Write(buf[:n])
-			if err != nil {
-				var opError *net.OpError
-				if errors.As(err, &opError) &&
-					opError.Err.Error() == "write: connection refused" {
-					continue
+			buf := make([]byte, 1500)
+			rtpPacket := &rtp.Packet{}
+			for {
+				if peer.IsNull() {
+					break
 				}
 
-				fmt.Fprintf(os.Stderr,
-					"conn %d: rtp packet write - %s\n",
-					peerIndex,
-					err)
+				n, _, err := track.Read(buf)
+				if err != nil {
+					fmt.Fprintf(os.Stderr,
+						"conn %d: track read - %s\n",
+						peerConnectionId,
+						err)
+					break
+				}
 
-				break
+				err = rtpPacket.Unmarshal(buf[:n])
+				if err != nil {
+					fmt.Fprintf(os.Stderr,
+						"conn %d: rtp packet unmarshal - %s\n",
+						peerConnectionId,
+						err)
+				}
+				rtpPacket.PayloadType = payloadType
+
+				n, err = rtpPacket.MarshalTo(buf)
+				if err != nil {
+					fmt.Fprintf(os.Stderr,
+						"conn %d: rtp packet marshal - %s\n",
+						peerConnectionId,
+						err)
+				}
+
+				_, err = connection.Write(buf[:n])
+				if err != nil {
+					var opError *net.OpError
+					if errors.As(err, &opError) &&
+						opError.Err.Error() == "write: connection refused" {
+						continue
+					}
+
+					fmt.Fprintf(os.Stderr,
+						"conn %d: rtp packet write - %s\n",
+						peerConnectionId,
+						err)
+
+					break
+				}
 			}
-		}
-	})
+		})
 
-	(*peers)[peerIndex].dataChannel.OnClose(func() {
-	})
+	peer.dataChannel.OnClose(
+		func() {
+		})
 
-	(*peers)[peerIndex].dataChannel.OnMessage(func(message webrtc.DataChannelMessage) {
-		fmt.Fprintf(os.Stderr,
-			"conn %d: data - %s\n",
-			peerIndex,
-			string(message.Data))
-	})
+	peer.dataChannel.OnMessage(
+		func(message webrtc.DataChannelMessage) {
+			fmt.Fprintf(os.Stderr,
+				"conn %d: data - %s\n",
+				peerConnectionId,
+				string(message.Data))
+		})
 }
 
 func streamLocalTrack(peers *[]Peer, mediaType MediaType, port int) {
@@ -355,14 +272,14 @@ func streamLocalTrack(peers *[]Peer, mediaType MediaType, port int) {
 				}
 			}()
 
-			if track == nil {
+			if peer.IsNull() {
 				continue
 			}
 			_, err = track.Write(inboundRTPPacket[:readBytes])
 			if err != nil {
-				if errors.Is(err, io.ErrClosedPipe) {
-					peer.Close(peerIndex)
-				}
+				// if errors.Is(err, io.ErrClosedPipe) {
+				// 	peer.Close(peerIndex)
+				// }
 
 				fmt.Fprintf(os.Stderr,
 					"conn %d: while write to track: %s\n",

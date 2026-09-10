@@ -4,18 +4,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
-
-	"github.com/pion/webrtc/v4"
-)
-
-type PeerType int
-
-const (
-	PeerTypeHost  PeerType = 0
-	PeerTypeGuest PeerType = 1
 )
 
 type MediaType int
@@ -26,6 +16,10 @@ const (
 )
 
 func main() {
+
+	var room Room
+	room.nextPeerConnectionId = 0
+
 	if len(os.Args) != 4 ||
 		(os.Args[1] != "host" && os.Args[1] != "guest") {
 		fmt.Fprintf(os.Stderr,
@@ -33,22 +27,19 @@ func main() {
 		return
 	}
 
-	var peerType PeerType
-
 	switch os.Args[1] {
 	case "host":
-		peerType = PeerTypeHost
+		room.meetingType = MeetingTypeHost
 	case "guest":
-		peerType = PeerTypeGuest
+		room.meetingType = MeetingTypeGuest
 	}
 
 	signalServer := os.Args[2]
-	hostId := os.Args[3]
-	// signalServer := "https://meetupstation.com"
-	// hostId := "secret host room id"
-	// peerType := PeerTypeHost
+	room.signalId = os.Args[3]
 
-	var peers []Peer
+	// signalServer := "https://meetupstation.com"
+	// room.signalId = "secret host room id"
+	// room.meetingType = MeetingTypeGuest
 
 	interruptChannel := make(chan os.Signal, 1)
 	signal.Notify(interruptChannel, os.Interrupt, syscall.SIGTERM)
@@ -57,143 +48,52 @@ func main() {
 		os.Exit(0)
 	}()
 
-	var mutex sync.Mutex
+	go streamLocalTrack(&room.peers, MediaTypeAudio, 4000)
+	go streamLocalTrack(&room.peers, MediaTypeVideo, 4002)
 
-	go streamLocalTrack(&peers, MediaTypeAudio, 4000)
-	go streamLocalTrack(&peers, MediaTypeVideo, 4002)
+	room.signalAccessKey = ""
 
 	for {
-		fmt.Fprintf(os.Stderr, "starting a new peer connection...\n")
+		room.localSessionDescription = ""
+		room.localCandidates = []string{}
+		room.remoteSessionDescription = ""
+		room.remoteCandidates = []string{}
+		room.signallingComplete = false
+
+		peerConnectionId := room.nextPeerConnectionId
+		fmt.Fprintf(os.Stdout, "conn %d, starting in a second...\n", peerConnectionId)
+		time.Sleep(time.Second)
 
 		var err error
-		peerIndex, connectedChannel := newPeerConnection(&peers, &mutex)
+		err = room.initializePeerConnection()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "conn %d: %s\n", peerConnectionId, err)
+			continue
+		}
+		room.nextPeerConnectionId++
 
-		var localSessionDescription webrtc.SessionDescription
+		fmt.Fprintf(os.Stdout, "conn %d: setting up tracks and data handlers\n", peerConnectionId)
 
-		mutex.Lock()
-		fmt.Fprintf(os.Stderr, "conn %d: setting up tracks and data handlers\n", peerIndex)
-		setupTracksAndDataHandlers(&peers, peerIndex)
-		mutex.Unlock()
-
-		if peerType == PeerTypeHost {
-			for {
-				mutex.Lock()
-				offerSessionDescription, err := peers[peerIndex].peerConnection.CreateOffer(nil)
-				mutex.Unlock()
-
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "while creating offer: %s\n", err)
-					continue
-				}
-				localSessionDescription = offerSessionDescription
-				break
-			}
-		} else {
-			hostOffer := signalWaitForHost(signalServer, hostId, peerIndex)
-
-			for {
-				mutex.Lock()
-				err = peers[peerIndex].peerConnection.SetRemoteDescription(hostOffer)
-				mutex.Unlock()
-
-				if err != nil {
-					fmt.Fprintf(os.Stderr,
-						"while setting remote description: %s\n",
-						err)
-					continue
-				}
-				break
-			}
-
-			for {
-				mutex.Lock()
-				answerSessionDescription, err := peers[peerIndex].peerConnection.CreateAnswer(nil)
-				mutex.Unlock()
-
-				if err != nil {
-					fmt.Fprintf(os.Stderr,
-						"while creating answer: %s\n",
-						err)
-					continue
-				}
-				localSessionDescription = answerSessionDescription
-				break
-			}
+		err = room.prepareGuestAnswerOrHostOffer(peerConnectionId, signalServer)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "conn %d: %s\n", peerConnectionId, err)
+			continue
 		}
 
-		// later will be locking untill this channel completes
-		mutex.Lock()
-		waitForAllICECandidates := webrtc.GatheringCompletePromise(peers[peerIndex].peerConnection)
-		mutex.Unlock()
+		fmt.Fprintf(os.Stdout, "conn %d: waiting for ice connection\n", peerConnectionId)
 
-		for {
-			mutex.Lock()
-			err = peers[peerIndex].peerConnection.SetLocalDescription(localSessionDescription)
-			mutex.Unlock()
-
+		err = room.waitForIceConnected(peerConnectionId, signalServer)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "conn %d: %s\n", peerConnectionId, err)
+		} else if room.meetingType == MeetingTypeGuest {
+			fmt.Fprintf(os.Stdout, "conn %d: waiting for ice disconnection\n", peerConnectionId)
+			err = room.waitForIceDisconnected(peerConnectionId, signalServer)
 			if err != nil {
-				fmt.Fprintf(os.Stderr,
-					"while setting local description: %s\n",
-					err)
-				continue
+				fmt.Fprintf(os.Stderr, "conn %d: %s\n", peerConnectionId, err)
 			}
-			break
 		}
 
-		fmt.Fprintf(os.Stderr, "conn %d: waiting for all ice candidates\n", peerIndex)
-		<-waitForAllICECandidates
-
-		fmt.Fprintf(os.Stderr, "conn %d: all ice candidates are received from stun server\n", peerIndex)
-
-		var peerLocalSessionDescription *webrtc.SessionDescription
-		mutex.Lock()
-		peerLocalSessionDescription = peers[peerIndex].peerConnection.LocalDescription()
-		mutex.Unlock()
-
-		if peerType == PeerTypeHost {
-
-			fmt.Fprintf(os.Stderr, "conn %d: waiting for the signalling settlement\n", peerIndex)
-
-			guestAnswer := signalWaitForGuest(signalServer,
-				hostId,
-				peerIndex,
-				*peerLocalSessionDescription)
-
-			// debug logging
-			fmt.Fprintf(os.Stderr, "conn %d: setting the remote description\n", peerIndex)
-
-			mutex.Lock()
-			peers[peerIndex].peerConnection.SetRemoteDescription(guestAnswer)
-			mutex.Unlock()
-
-			// debug logging
-			fmt.Fprintf(os.Stderr, "conn %d: have set the remote description\n", peerIndex)
-		} else {
-			signalGuestSetup(signalServer,
-				hostId,
-				*peerLocalSessionDescription,
-				peerIndex)
-		}
-
-		fmt.Fprintf(os.Stderr, "conn %d: signalling settled: waiting for the ice connection\n", peerIndex)
-
-		select {
-		case connected := <-connectedChannel:
-			if connected {
-				fmt.Fprintf(os.Stderr, "conn %d: ice connected\n", peerIndex)
-				if peerType == PeerTypeGuest {
-					connected = <-connectedChannel
-				}
-			}
-
-			if !connected {
-				fmt.Fprintf(os.Stderr, "conn %d: ice disconnected\n", peerIndex)
-			}
-		case <-time.After(30 * time.Second):
-			fmt.Fprintf(os.Stderr, "conn %d: timeout waiting for ice event\n", peerIndex)
-			mutex.Lock()
-			peers[peerIndex].Close(peerIndex)
-			mutex.Unlock()
-		}
+		// waitForAllICECandidates := webrtc.GatheringCompletePromise(room.getPeer(peerConnectionId).peerConnection)
+		// <-waitForAllICECandidates
 	}
 }

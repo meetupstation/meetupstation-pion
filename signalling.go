@@ -7,272 +7,195 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
-	"time"
 
 	"github.com/pion/webrtc/v4"
 )
 
-func signalHostSetup(signalServer string,
-	hostId string,
-	peerLocalSessionDescription webrtc.SessionDescription,
-	peerIndex int) {
+func (room *Room) signalHostPost(signalServer string) error {
 
 	client := &http.Client{}
 
-	for {
-		request, err := http.NewRequest(http.MethodPost,
-			fmt.Sprintf("%s/api/host",
-				signalServer),
-			bytes.NewBufferString(
-				fmt.Sprintf("{\"id\": \"%s\", \"description\": \"%s\"}",
-					hostId,
-					encode(
-						&peerLocalSessionDescription,
-					),
-				),
-			))
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"conn %d: while setting up hostId with signalling server: %s\n",
-				peerIndex,
-				err)
-			time.Sleep(1 * time.Second)
-			continue
-		}
-
-		request.Header.Add("Content-type", "application/json; charset=UTF-8")
-
-		hostSignal, err := client.Do(request)
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"conn %d: while setting up hostId with signalling server: %s\n",
-				peerIndex,
-				err)
-			time.Sleep(1 * time.Second)
-			continue
-		}
-		allOK := hostSignal.StatusCode == http.StatusOK
-		hostSignal.Body.Close()
-
-		if allOK {
-			// var hostSignalBody map[string]interface{}
-
-			// json.NewDecoder(hostSignal.Body).Decode(hostSignalBody)
-			break
-		} else {
-			fmt.Fprintf(os.Stderr,
-				"conn %d: while setting up hostId with signalling server: %s\n",
-				peerIndex,
-				"response status")
-			time.Sleep(1 * time.Second)
-			continue
-		}
+	payload := struct {
+		HostID      string   `json:"hostId"`
+		Description string   `json:"description"`
+		Candidates  []string `json:"candidates"`
+		AccessKey   string   `json:"accessKey"`
+	}{
+		HostID:      room.signalId,
+		Description: room.localSessionDescription,
+		Candidates:  room.localCandidates,
+		AccessKey:   room.signalAccessKey,
 	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	request, err := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/host", signalServer),
+		bytes.NewBuffer(body))
+	if err != nil {
+		return err
+	}
+
+	request.Header.Add("Content-type", "application/json; charset=UTF-8")
+
+	hostSignal, err := client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer hostSignal.Body.Close()
+
+	if hostSignal.StatusCode != http.StatusOK {
+		return fmt.Errorf("posting host signal: %s\n", "response code")
+	}
+
+	hostSignalBody := struct {
+		ID        string `json:"id"`
+		AccessKey string `json:"accessKey"`
+	}{}
+	if err := json.NewDecoder(hostSignal.Body).Decode(&hostSignalBody); err != nil {
+		return err
+	}
+
+	room.signalId = hostSignalBody.ID
+	room.signalAccessKey = hostSignalBody.AccessKey
+
+	return nil
 }
 
-func signalWaitForHost(signalServer string,
-	hostId string,
-	peerIndex int) webrtc.SessionDescription {
+func (room *Room) signalHostGet(signalServer string) (bool, error) {
 
 	client := &http.Client{}
 
-	for {
-		params := url.Values{}
-		params.Add("id", hostId)
+	params := url.Values{}
+	params.Add("id", room.signalId)
+	params.Add("accessKey", room.signalAccessKey)
 
-		request, err := http.NewRequest(http.MethodGet,
-			fmt.Sprintf(
-				"%s/api/host?%s",
-				signalServer,
-				params.Encode(),
-			),
-			nil)
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"conn %d: while getting host information with signalling server: %s\n",
-				peerIndex,
-				err)
-			time.Sleep(1 * time.Second)
-			continue
-		}
-
-		hostSignal, err := client.Do(request)
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"conn %d: while getting host information with signalling server: %s\n",
-				peerIndex,
-				err)
-			time.Sleep(1 * time.Second)
-			continue
-		}
-		var hostDescriptionObject map[string]string
-		allOK := hostSignal.StatusCode == http.StatusOK
-		if allOK {
-			json.NewDecoder(hostSignal.Body).Decode(&hostDescriptionObject)
-		}
-		hostSignal.Body.Close()
-
-		if allOK {
-
-			hostDescription := hostDescriptionObject["description"]
-			hostOffer := webrtc.SessionDescription{}
-			decode(hostDescription, &hostOffer)
-
-			return hostOffer
-		} else {
-			fmt.Fprintf(os.Stderr,
-				"conn %d: while setting up hostId with signalling server: %s\n",
-				peerIndex,
-				"response status")
-			time.Sleep(1 * time.Second)
-			continue
-		}
+	request, err := http.NewRequest(http.MethodGet,
+		fmt.Sprintf(
+			"%s/api/host?%s",
+			signalServer,
+			params.Encode(),
+		),
+		nil)
+	if err != nil {
+		return false, err
 	}
+
+	hostSignal, err := client.Do(request)
+	if err != nil {
+		return false, err
+	}
+	defer hostSignal.Body.Close()
+
+	if hostSignal.StatusCode != http.StatusOK {
+		return true, fmt.Errorf("getting host signal: %s\n", "response code / host does not exist")
+	}
+
+	hostSignalBody := struct {
+		ID          string   `json:"id"`
+		Description string   `json:"description"`
+		Candidates  []string `json:"candidates"`
+		AccessKey   string   `json:"accessKey"`
+	}{}
+	if err := json.NewDecoder(hostSignal.Body).Decode(&hostSignalBody); err != nil {
+		return false, err
+	}
+
+	room.remoteSessionDescription = hostSignalBody.Description
+	room.remoteCandidates = hostSignalBody.Candidates
+	room.signalAccessKey = hostSignalBody.AccessKey
+
+	return true, nil
 }
 
-func signalGuestSetup(signalServer string,
-	hostId string,
-	peerLocalSessionDescription webrtc.SessionDescription,
-	peerIndex int) {
+func (room *Room) signalGuestPost(signalServer string) (bool, error) {
 
 	client := &http.Client{}
 
-	for {
-		request, err := http.NewRequest(http.MethodPost,
-			fmt.Sprintf("%s/api/guest",
-				signalServer),
-			bytes.NewBufferString(
-				fmt.Sprintf("{\"hostId\": \"%s\", \"guestDescription\": \"%s\"}",
-					hostId,
-					encode(
-						&peerLocalSessionDescription,
-					),
-				),
-			))
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"conn %d: while setting up guestDescription with signalling server: %s\n",
-				peerIndex,
-				err)
-			time.Sleep(1 * time.Second)
-			continue
-		}
-
-		request.Header.Add("Content-type", "application/json; charset=UTF-8")
-
-		guestSignal, err := client.Do(request)
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"conn %d: while setting up guestDescription with signalling server: %s\n",
-				peerIndex,
-				err)
-			time.Sleep(1 * time.Second)
-			continue
-		}
-		allOK := guestSignal.StatusCode == http.StatusOK
-		guestSignal.Body.Close()
-
-		if allOK {
-			// var guestSignalBody map[string]interface{}
-
-			// json.NewDecoder(hostSignal.Body).Decode(hostSignalBody)
-			break
-		} else {
-			fmt.Fprintf(os.Stderr,
-				"conn %d: while setting up guestDescription with signalling server: %s\n",
-				peerIndex,
-				"response status")
-			time.Sleep(1 * time.Second)
-			continue
-		}
+	payload := struct {
+		HostID      string   `json:"hostId"`
+		Description string   `json:"description"`
+		Candidates  []string `json:"candidates"`
+		AccessKey   string   `json:"accessKey"`
+	}{
+		HostID:      room.signalId,
+		Description: room.localSessionDescription,
+		Candidates:  room.localCandidates,
+		AccessKey:   room.signalAccessKey,
 	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return false, err
+	}
+
+	request, err := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/guest",
+			signalServer),
+		bytes.NewBuffer(body))
+	if err != nil {
+		return false, err
+	}
+
+	request.Header.Add("Content-type", "application/json; charset=UTF-8")
+
+	guestSignal, err := client.Do(request)
+	if err != nil {
+		return false, err
+	}
+	defer guestSignal.Body.Close()
+
+	if guestSignal.StatusCode != http.StatusOK {
+		return true, fmt.Errorf("posting guest signal: %s\n", "response code / host does not exist")
+	}
+
+	return true, nil
 }
 
-func signalWaitForGuest(signalServer string,
-	hostId string,
-	peerIndex int,
-	peerLocalSessionDescription webrtc.SessionDescription) webrtc.SessionDescription {
+func (room *Room) signalGuestGet(signalServer string) error {
 
 	client := &http.Client{}
 
-	for {
-		params := url.Values{}
-		params.Add("hostId", hostId)
+	params := url.Values{}
+	params.Add("hostId", room.signalId)
+	params.Add("accessKey", room.signalAccessKey)
 
-		request, err := http.NewRequest(http.MethodGet,
-			fmt.Sprintf(
-				"%s/api/guest?%s",
-				signalServer,
-				params.Encode(),
-			),
-			nil)
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"conn %d: while getting guest information with signalling server: %s\n",
-				peerIndex,
-				err)
-			time.Sleep(1 * time.Second)
-			continue
-		}
-
-		guestSignal, err := client.Do(request)
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"conn %d: while getting guest information with signalling server: %s\n",
-				peerIndex,
-				err)
-			time.Sleep(1 * time.Second)
-			continue
-		}
-
-		var guestDescriptionObject map[string]string
-		allOK := guestSignal.StatusCode == http.StatusOK
-		if allOK {
-			// debug logging
-			fmt.Fprintf(os.Stderr,
-				"conn %d: decoding the guest signal!\n",
-				peerIndex)
-			json.NewDecoder(guestSignal.Body).Decode(&guestDescriptionObject)
-
-			// debug logging
-			fmt.Fprintf(os.Stderr,
-				"conn %d: have decoded the guest signal!\n",
-				peerIndex)
-		}
-		guestSignal.Body.Close()
-
-		if allOK {
-			guestDescription := guestDescriptionObject["guestDescription"]
-			if guestDescription != "" {
-				// debug logging
-				fmt.Fprintf(os.Stderr,
-					"conn %d: the guest has apparently signalled!\n",
-					peerIndex)
-
-				guestAnswer := webrtc.SessionDescription{}
-				decode(guestDescription, &guestAnswer)
-
-				return guestAnswer
-			}
-
-			fmt.Fprintf(os.Stderr,
-				"conn %d: the guest has not signalled yet\n",
-				peerIndex)
-			time.Sleep(1 * time.Second)
-		} else {
-			fmt.Fprintf(os.Stderr,
-				"conn %d: first need to create the host\n",
-				peerIndex)
-
-			signalHostSetup(signalServer,
-				hostId,
-				peerLocalSessionDescription,
-				peerIndex)
-		}
+	request, err := http.NewRequest(http.MethodGet,
+		fmt.Sprintf(
+			"%s/api/guest?%s",
+			signalServer,
+			params.Encode(),
+		),
+		nil)
+	if err != nil {
+		return err
 	}
+
+	guestSignal, err := client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer guestSignal.Body.Close()
+
+	if guestSignal.StatusCode != http.StatusOK {
+		return fmt.Errorf("getting guest signal: %s\n", "response code / host does not exist")
+	}
+
+	guestSignalBody := struct {
+		Description string   `json:"description"`
+		Candidates  []string `json:"candidates"`
+	}{}
+	if err := json.NewDecoder(guestSignal.Body).Decode(&guestSignalBody); err != nil {
+		return fmt.Errorf("while setting up hostId with signalling server: %s\n", err)
+	}
+
+	room.remoteSessionDescription = guestSignalBody.Description
+	room.remoteCandidates = guestSignalBody.Candidates
+
+	return nil
 }
 
 // JSON encode + base64 a SessionDescription.
