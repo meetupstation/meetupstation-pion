@@ -59,6 +59,7 @@ func main() {
 		room.remoteSessionDescription = ""
 		room.remoteCandidates = []string{}
 		room.signallingComplete = false
+		room.waitForAllICECandidates = nil
 
 		peerConnectionId := room.nextPeerConnectionId
 		fmt.Fprintf(os.Stdout, "conn %d, starting in a second...\n", peerConnectionId)
@@ -92,8 +93,5 @@ func main() {
 				fmt.Fprintf(os.Stderr, "conn %d: %s\n", peerConnectionId, err)
 			}
 		}
-
-		// waitForAllICECandidates := webrtc.GatheringCompletePromise(room.getPeer(peerConnectionId).peerConnection)
-		// <-waitForAllICECandidates
 	}
 }
