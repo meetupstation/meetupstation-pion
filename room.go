@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"sync"
 	"time"
@@ -17,7 +18,7 @@ const (
 )
 
 type Room struct {
-	peers                    []Peer
+	peers                    []*Peer
 	peerIndex                int
 	signalAccessKey          string
 	nextPeerConnectionId     int
@@ -36,14 +37,113 @@ func (room *Room) appendPeer(peer Peer) {
 	room.mutex.Lock()
 	defer room.mutex.Unlock()
 
-	room.peers = append(room.peers, peer)
+	room.peers = append(room.peers, &peer)
 }
 
-func (room *Room) getPeer(peerconnectionId int) Peer {
+func (room *Room) getPeer(peerconnectionId int) *Peer {
 	room.mutex.Lock()
 	defer room.mutex.Unlock()
 
 	return room.peers[peerconnectionId]
+}
+
+func startPeerConnection() (
+	*webrtc.PeerConnection,
+	*webrtc.TrackLocalStaticRTP,
+	*webrtc.TrackLocalStaticRTP,
+	*webrtc.DataChannel,
+	error) {
+
+	peerConnection, err := webrtc.NewPeerConnection(webrtc.Configuration{
+		ICEServers: []webrtc.ICEServer{
+			{
+				URLs: []string{"stun:stun.l.google.com:19302"},
+			},
+		},
+	})
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	videoTrack, err := webrtc.NewTrackLocalStaticRTP(
+		webrtc.RTPCodecCapability{
+			MimeType: webrtc.MimeTypeH264,
+		},
+		"video",
+		"pion")
+
+	if err != nil {
+		peerConnection.Close()
+		return nil, nil, nil, nil, err
+	}
+
+	rtpSender, err := peerConnection.AddTrack(videoTrack)
+	if err != nil {
+		peerConnection.Close()
+		return nil, nil, nil, nil, err
+	}
+	_ = rtpSender
+
+	audioTrack, err := webrtc.NewTrackLocalStaticRTP(
+		webrtc.RTPCodecCapability{
+			MimeType: webrtc.MimeTypeOpus,
+		},
+		"audio",
+		"pion")
+
+	if err != nil {
+		peerConnection.Close()
+		return nil, nil, nil, nil, err
+	}
+
+	rtpSender, err = peerConnection.AddTrack(audioTrack)
+	if err != nil {
+		peerConnection.Close()
+		return nil, nil, nil, nil, err
+	}
+	_ = rtpSender
+
+	// // Read incoming RTCP packets
+	// // Before these packets are returned they are processed by interceptors. For things
+	// // like NACK this needs to be called.
+	// go func() {
+	// 	rtcpBuf := make([]byte, 1500)
+	// 	for {
+	// 		if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
+	// 			return
+	// 		}
+	// 	}
+	// }()
+
+	dataChannelOrdered := true
+	dataChannelNegotiated := true
+	var dataChannelID uint16 = 0
+	dataChannelInit := webrtc.DataChannelInit{
+		Ordered:    &dataChannelOrdered,
+		Negotiated: &dataChannelNegotiated,
+		ID:         &dataChannelID,
+	}
+	dataChannel, err := peerConnection.CreateDataChannel(
+		"meetupstation", &dataChannelInit)
+	if err != nil {
+		peerConnection.Close()
+		return nil, nil, nil, nil, err
+	}
+
+	// dataChannel.OnOpen(func() {
+	// 	fmt.Fprintf(os.Stderr,
+	// 		"data channel opened\n")
+	// })
+	// dataChannel.OnClose(func() {
+	// 	fmt.Fprintf(os.Stderr,
+	// 		"data channel closed\n")
+	// })
+
+	return peerConnection,
+		videoTrack,
+		audioTrack,
+		dataChannel,
+		nil
 }
 
 func (room *Room) initializePeerConnection() error {
@@ -76,6 +176,61 @@ func (room *Room) initializePeerConnection() error {
 	return nil
 }
 
+func (room *Room) setupTracksAndDataHandlers(peerConnectionId int) {
+
+	peer := room.getPeer(peerConnectionId)
+
+	var localAddress *net.UDPAddr
+	var err error
+
+	localAddress, err = net.ResolveUDPAddr("udp", "127.0.0.1:")
+	if err != nil {
+		panic(fmt.Sprintf("logic: net.ResolveUDPAddr for local - %s", err))
+	}
+
+	var remoteAddressAudio *net.UDPAddr
+	remoteAddressAudio, err = net.ResolveUDPAddr("udp", "127.0.0.1:4004")
+	if err != nil {
+		panic(fmt.Sprintf("logic: net.ResolveUDPAddr for remote audio - %s", err))
+	}
+
+	peer.remoteAudioConnection, err = net.DialUDP("udp", localAddress, remoteAddressAudio)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"conn %d: audio - net.DialUDP - %s\n",
+			peerConnectionId,
+			err)
+	}
+
+	var remoteAddressVideo *net.UDPAddr
+	remoteAddressVideo, err = net.ResolveUDPAddr("udp", "127.0.0.1:4006")
+	if err != nil {
+		panic(fmt.Sprintf("logic: net.ResolveUDPAddr for remote video - %s", err))
+	}
+
+	peer.remoteVideoConnection, err = net.DialUDP("udp", localAddress, remoteAddressVideo)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"conn %d: video - net.DialUDP - %s\n",
+			peerConnectionId,
+			err)
+	}
+
+	peer.peerConnection.OnTrack(peer.receiveRemote)
+
+	peer.dataChannel.OnClose(
+		func() {
+		})
+
+	peer.dataChannel.OnMessage(
+		func(message webrtc.DataChannelMessage) {
+			fmt.Fprintf(os.Stderr,
+				"conn %d: data - %s\n",
+				peerConnectionId,
+				string(message.Data))
+		})
+}
+
 func (room *Room) prepareGuestAnswerOrHostOffer(
 	peerConnectionId int,
 	signalServer string) error {
@@ -86,13 +241,13 @@ func (room *Room) prepareGuestAnswerOrHostOffer(
 			continue
 		}
 
-		peer.CloseRemoteConnections(index)
+		peer.closeRemoteConnections(index)
 	}
 	room.mutex.Unlock()
 
-	peer := room.getPeer(peerConnectionId)
+	room.setupTracksAndDataHandlers(peerConnectionId)
 
-	setupTracksAndDataHandlers(peer, peerConnectionId)
+	peer := room.getPeer(peerConnectionId)
 
 	var err error
 	if room.meetingType == MeetingTypeHost {

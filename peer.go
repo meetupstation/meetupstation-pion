@@ -39,11 +39,11 @@ func (peer *Peer) onICEConnectionStateChange(connectionState webrtc.ICEConnectio
 			peer.connectedChannel <- false
 			close(peer.connectedChannel)
 		}
-		peer.Close(peerIndex)
+		peer.close(peerIndex)
 	}
 }
 
-func (peer *Peer) Close(index int) {
+func (peer *Peer) close(index int) {
 	if peer.peerConnection != nil {
 		err := peer.peerConnection.Close()
 		peer.peerConnection = nil
@@ -64,47 +64,10 @@ func (peer *Peer) Close(index int) {
 		peer.localAudioTrack = nil
 	}
 
-	if peer.dataChannel != nil {
-		peer.dataChannel.OnMessage(func(message webrtc.DataChannelMessage) {
-		})
-
-		err := peer.dataChannel.Close()
-		peer.dataChannel = nil
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"conn %d: dataChannel.Close - %s\n",
-				index,
-				err)
-		}
-	}
-
-	if peer.remoteAudioConnection != nil {
-		err := peer.remoteAudioConnection.Close()
-		peer.remoteAudioConnection = nil
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"conn %d: remoteAudioConnection.Close - %s\n",
-				index,
-				err)
-		}
-	}
-
-	if peer.remoteVideoConnection != nil {
-		err := peer.remoteVideoConnection.Close()
-		peer.remoteVideoConnection = nil
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"conn %d: remoteVideoConnection.Close - %s\n",
-				index,
-				err)
-		}
-	}
+	peer.closeRemoteConnections(index)
 }
 
-func (peer *Peer) CloseRemoteConnections(index int) {
+func (peer *Peer) closeRemoteConnections(index int) {
 	if peer.dataChannel != nil {
 		peer.dataChannel.OnMessage(func(message webrtc.DataChannelMessage) {
 		})
