@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"sync"
 	"time"
@@ -159,15 +158,13 @@ func (room *Room) initializePeerConnection() error {
 	}
 
 	peer := Peer{
-		peerConnection:        peerConnection,
-		peerConnectionId:      room.nextPeerConnectionId,
-		localVideoTrack:       localVideoTrack,
-		localAudioTrack:       localAudioTrack,
-		dataChannel:           dataChannel,
-		remoteVideoConnection: nil,
-		remoteAudioConnection: nil,
-		room:                  room,
-		connectedChannel:      make(chan bool),
+		peerConnection:   peerConnection,
+		peerConnectionId: room.nextPeerConnectionId,
+		localVideoTrack:  localVideoTrack,
+		localAudioTrack:  localAudioTrack,
+		dataChannel:      dataChannel,
+		room:             room,
+		connectedChannel: make(chan bool),
 	}
 	room.appendPeer(peer)
 
@@ -176,47 +173,20 @@ func (room *Room) initializePeerConnection() error {
 	return nil
 }
 
-func (room *Room) setupTracksAndDataHandlers(peerConnectionId int) {
-
+func (room *Room) setupTracksAndDataHandlers(mediaStream *MediaStream, peerConnectionId int) {
 	peer := room.getPeer(peerConnectionId)
 
-	var localAddress *net.UDPAddr
-	var err error
-
-	localAddress, err = net.ResolveUDPAddr("udp", "127.0.0.1:")
-	if err != nil {
-		panic(fmt.Sprintf("logic: net.ResolveUDPAddr for local - %s", err))
-	}
-
-	var remoteAddressAudio *net.UDPAddr
-	remoteAddressAudio, err = net.ResolveUDPAddr("udp", "127.0.0.1:4004")
-	if err != nil {
-		panic(fmt.Sprintf("logic: net.ResolveUDPAddr for remote audio - %s", err))
-	}
-
-	peer.remoteAudioConnection, err = net.DialUDP("udp", localAddress, remoteAddressAudio)
-	if err != nil {
-		fmt.Fprintf(os.Stderr,
-			"conn %d: audio - net.DialUDP - %s\n",
-			peerConnectionId,
-			err)
-	}
-
-	var remoteAddressVideo *net.UDPAddr
-	remoteAddressVideo, err = net.ResolveUDPAddr("udp", "127.0.0.1:4006")
-	if err != nil {
-		panic(fmt.Sprintf("logic: net.ResolveUDPAddr for remote video - %s", err))
-	}
-
-	peer.remoteVideoConnection, err = net.DialUDP("udp", localAddress, remoteAddressVideo)
-	if err != nil {
-		fmt.Fprintf(os.Stderr,
-			"conn %d: video - net.DialUDP - %s\n",
-			peerConnectionId,
-			err)
-	}
-
-	peer.peerConnection.OnTrack(peer.receiveRemote)
+	peer.peerConnection.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+		if track.Kind().String() == "video" {
+			mediaStream.remoteVideoMutex.Lock()
+			defer mediaStream.remoteVideoMutex.Unlock()
+			mediaStream.remoteVideoTrack = track
+		} else {
+			mediaStream.remoteAudioMutex.Lock()
+			defer mediaStream.remoteAudioMutex.Unlock()
+			mediaStream.remoteAudioTrack = track
+		}
+	})
 
 	peer.dataChannel.OnClose(
 		func() {
@@ -232,20 +202,21 @@ func (room *Room) setupTracksAndDataHandlers(peerConnectionId int) {
 }
 
 func (room *Room) prepareGuestAnswerOrHostOffer(
+	mediaStream *MediaStream,
 	peerConnectionId int,
 	signalServer string) error {
 
-	room.mutex.Lock()
-	for index, peer := range room.peers {
-		if index == peerConnectionId {
-			continue
-		}
+	// room.mutex.Lock()
+	// for index, peer := range room.peers {
+	// 	if index == peerConnectionId {
+	// 		continue
+	// 	}
 
-		peer.closeRemoteConnections(index)
-	}
-	room.mutex.Unlock()
+	// 	peer.closeDataChannel(index)
+	// }
+	// room.mutex.Unlock()
 
-	room.setupTracksAndDataHandlers(peerConnectionId)
+	room.setupTracksAndDataHandlers(mediaStream, peerConnectionId)
 
 	peer := room.getPeer(peerConnectionId)
 
@@ -371,7 +342,7 @@ func (room *Room) signalGuestOperations(signalServer string,
 			return false, err
 		}
 
-		peer.peerConnection.SetLocalDescription(answerSessionDescription)
+		err = peer.peerConnection.SetLocalDescription(answerSessionDescription)
 		if err != nil {
 			return false, err
 		}
@@ -407,6 +378,7 @@ func (room *Room) signalGuestOperations(signalServer string,
 		}
 		room.localSessionDescription = ""
 		room.localCandidates = []string{}
+		room.signalAccessKey = ""
 	}
 
 	return signalCode, nil
@@ -429,7 +401,6 @@ func (room *Room) signalHostOperations(
 
 	if len(room.localSessionDescription) != 0 || len(room.localCandidates) != 0 {
 		err = room.signalHostPost(signalServer)
-
 		if err != nil {
 			return false, err
 		}
@@ -437,7 +408,10 @@ func (room *Room) signalHostOperations(
 		room.localCandidates = []string{}
 	}
 
-	room.signalGuestGet(signalServer)
+	err = room.signalGuestGet(signalServer)
+	if err != nil {
+		return false, err
+	}
 
 	if len(room.remoteSessionDescription) != 0 {
 		var sessionDescription webrtc.SessionDescription

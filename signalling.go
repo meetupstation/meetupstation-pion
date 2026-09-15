@@ -16,7 +16,7 @@ func (room *Room) signalHostPost(signalServer string) error {
 	client := &http.Client{}
 
 	payload := struct {
-		HostID      string   `json:"hostId"`
+		HostID      string   `json:"id"`
 		Description string   `json:"description"`
 		Candidates  []string `json:"candidates"`
 		AccessKey   string   `json:"accessKey"`

@@ -2,22 +2,19 @@ package main
 
 import (
 	"fmt"
-	"net"
 	"os"
 
 	"github.com/pion/webrtc/v4"
 )
 
 type Peer struct {
-	peerConnection        *webrtc.PeerConnection
-	peerConnectionId      int
-	localVideoTrack       *webrtc.TrackLocalStaticRTP
-	localAudioTrack       *webrtc.TrackLocalStaticRTP
-	dataChannel           *webrtc.DataChannel
-	remoteVideoConnection *net.UDPConn
-	remoteAudioConnection *net.UDPConn
-	room                  *Room
-	connectedChannel      chan bool
+	peerConnection   *webrtc.PeerConnection
+	peerConnectionId int
+	localVideoTrack  *webrtc.TrackLocalStaticRTP
+	localAudioTrack  *webrtc.TrackLocalStaticRTP
+	dataChannel      *webrtc.DataChannel
+	room             *Room
+	connectedChannel chan bool
 }
 
 func (peer *Peer) onICEConnectionStateChange(connectionState webrtc.ICEConnectionState) {
@@ -64,10 +61,10 @@ func (peer *Peer) close(index int) {
 		peer.localAudioTrack = nil
 	}
 
-	peer.closeRemoteConnections(index)
+	peer.closeDataChannel(index)
 }
 
-func (peer *Peer) closeRemoteConnections(index int) {
+func (peer *Peer) closeDataChannel(index int) {
 	if peer.dataChannel != nil {
 		peer.dataChannel.OnMessage(func(message webrtc.DataChannelMessage) {
 		})
@@ -82,36 +79,10 @@ func (peer *Peer) closeRemoteConnections(index int) {
 				err)
 		}
 	}
-
-	if peer.remoteAudioConnection != nil {
-		err := peer.remoteAudioConnection.Close()
-		peer.remoteAudioConnection = nil
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"conn %d: remoteAudioConnection.Close - %s\n",
-				index,
-				err)
-		}
-	}
-
-	if peer.remoteVideoConnection != nil {
-		err := peer.remoteVideoConnection.Close()
-		peer.remoteVideoConnection = nil
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"conn %d: remoteVideoConnection.Close - %s\n",
-				index,
-				err)
-		}
-	}
 }
 
 func (peer *Peer) IsNull() bool {
 	return (peer.peerConnection == nil ||
-		peer.remoteAudioConnection == nil ||
-		peer.remoteVideoConnection == nil ||
 		peer.dataChannel == nil ||
 		peer.localAudioTrack == nil ||
 		peer.localVideoTrack == nil)
