@@ -206,16 +206,6 @@ func (room *Room) prepareGuestAnswerOrHostOffer(
 	peerConnectionId int,
 	signalServer string) error {
 
-	// room.mutex.Lock()
-	// for index, peer := range room.peers {
-	// 	if index == peerConnectionId {
-	// 		continue
-	// 	}
-
-	// 	peer.closeDataChannel(index)
-	// }
-	// room.mutex.Unlock()
-
 	room.setupTracksAndDataHandlers(mediaStream, peerConnectionId)
 
 	peer := room.getPeer(peerConnectionId)
@@ -224,7 +214,7 @@ func (room *Room) prepareGuestAnswerOrHostOffer(
 	if room.meetingType == MeetingTypeHost {
 		err = room.signalHostPost(signalServer)
 		if err != nil {
-			return fmt.Errorf("host already exists probably: %s\n", err)
+			return err
 		}
 
 		room.waitForAllICECandidates = webrtc.GatheringCompletePromise(peer.peerConnection)
@@ -239,8 +229,6 @@ func (room *Room) prepareGuestAnswerOrHostOffer(
 		if err != nil {
 			return err
 		}
-
-		// room.localSessionDescription = encode(&offerSessionDescription)
 	} else {
 
 	}
@@ -265,7 +253,7 @@ func (room *Room) waitForIceConnected(peerConnectionId int,
 			if connected {
 				return nil
 			} else {
-				return fmt.Errorf("ice disconnected\n")
+				return fmt.Errorf("ice disconnected")
 			}
 		case <-time.After(stepWait * time.Millisecond):
 			if !room.signallingComplete {
@@ -277,7 +265,7 @@ func (room *Room) waitForIceConnected(peerConnectionId int,
 		}
 	}
 
-	return fmt.Errorf("ice connection time out\n")
+	return fmt.Errorf("ice connection time out")
 }
 
 func (room *Room) waitForIceDisconnected(peerConnectionId int,
@@ -292,7 +280,7 @@ func (room *Room) waitForIceDisconnected(peerConnectionId int,
 			if !connected {
 				return nil
 			} else {
-				return fmt.Errorf("ice connected\n")
+				return fmt.Errorf("ice connected")
 			}
 		case <-time.After(stepWait * time.Millisecond):
 			if !room.signallingComplete {
@@ -317,13 +305,15 @@ func (room *Room) signalOperations(signalServer string,
 func (room *Room) signalGuestOperations(signalServer string,
 	peerConnectionId int) (bool, error) {
 
-	signalCode, err := room.signalHostGet(signalServer)
-	if err != nil && signalCode == true {
-		return signalCode, nil
+	signallingComplete, err := room.signalHostGet(signalServer)
+	if err != nil && signallingComplete == false {
+		return signallingComplete, err
 	}
-	if err != nil {
-		return false, err
+	if len(room.localSessionDescription) != 0 || (err != nil && signallingComplete == true) {
+		room.signalAccessKey = ""
+		return signallingComplete, nil
 	}
+	signallingComplete = false
 
 	peer := room.getPeer(peerConnectionId)
 
@@ -346,10 +336,6 @@ func (room *Room) signalGuestOperations(signalServer string,
 		if err != nil {
 			return false, err
 		}
-
-		fmt.Fprintf(os.Stdout, "conn %d: got the remote\n", peerConnectionId)
-
-		// room.localSessionDescription = encode(&answerSessionDescription)
 	} else if len(room.remoteCandidates) != 0 {
 		// for (const candidate of room.remoteCandidates) {
 		//     await peerConnection.addIceCandidate(
@@ -369,26 +355,25 @@ func (room *Room) signalGuestOperations(signalServer string,
 	default:
 	}
 
-	signalCode = false
 	if len(room.localSessionDescription) != 0 || len(room.localCandidates) != 0 {
-		fmt.Fprintf(os.Stdout, "conn %d: set the local\n", peerConnectionId)
-		signalCode, err = room.signalGuestPost(signalServer)
-		if err != nil && signalCode == false {
-			return signalCode, err
+		signallingComplete, err = room.signalGuestPost(signalServer)
+		if err != nil && signallingComplete == false {
+			return signallingComplete, err
+		}
+		if len(room.localSessionDescription) != 0 || (err != nil && signallingComplete == true) {
+			room.signalAccessKey = ""
 		}
 		room.localSessionDescription = ""
 		room.localCandidates = []string{}
-		room.signalAccessKey = ""
 	}
 
-	return signalCode, nil
+	return signallingComplete, nil
 }
 
 func (room *Room) signalHostOperations(
 	signalServer string,
 	peerConnectionId int) (bool, error) {
 
-	final := false
 	var err error
 
 	select {
@@ -402,7 +387,7 @@ func (room *Room) signalHostOperations(
 	if len(room.localSessionDescription) != 0 || len(room.localCandidates) != 0 {
 		err = room.signalHostPost(signalServer)
 		if err != nil {
-			return false, err
+			return true, err
 		}
 		room.localSessionDescription = ""
 		room.localCandidates = []string{}
@@ -410,14 +395,16 @@ func (room *Room) signalHostOperations(
 
 	err = room.signalGuestGet(signalServer)
 	if err != nil {
-		return false, err
+		return true, err
 	}
+
+	signallingComplete := false
 
 	if len(room.remoteSessionDescription) != 0 {
 		var sessionDescription webrtc.SessionDescription
 		decode(room.remoteSessionDescription, &sessionDescription)
 		room.getPeer(peerConnectionId).peerConnection.SetRemoteDescription(sessionDescription)
-		final = true
+		signallingComplete = true
 	} else if len(room.remoteCandidates) != 0 {
 		// for (const candidate of room.remoteCandidates) {
 		//     await peerConnection.addIceCandidate(
@@ -428,5 +415,5 @@ func (room *Room) signalHostOperations(
 	room.remoteSessionDescription = ""
 	room.remoteCandidates = []string{}
 
-	return final, nil
+	return signallingComplete, nil
 }

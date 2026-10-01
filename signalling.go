@@ -48,7 +48,7 @@ func (room *Room) signalHostPost(signalServer string) error {
 	defer hostSignal.Body.Close()
 
 	if hostSignal.StatusCode != http.StatusOK {
-		return fmt.Errorf("posting host signal: %s\n", "response code")
+		return fmt.Errorf("posting host signal: %s", "host is already in a call")
 	}
 
 	hostSignalBody := struct {
@@ -91,7 +91,7 @@ func (room *Room) signalHostGet(signalServer string) (bool, error) {
 	defer hostSignal.Body.Close()
 
 	if hostSignal.StatusCode != http.StatusOK {
-		return true, fmt.Errorf("getting host signal: %s\n", "response code / host does not exist")
+		return true, fmt.Errorf("getting host signal: %s", "host not found or is already in a call")
 	}
 
 	hostSignalBody := struct {
@@ -149,7 +149,7 @@ func (room *Room) signalGuestPost(signalServer string) (bool, error) {
 	defer guestSignal.Body.Close()
 
 	if guestSignal.StatusCode != http.StatusOK {
-		return true, fmt.Errorf("posting guest signal: %s\n", "response code / host does not exist")
+		return true, fmt.Errorf("posting guest signal: %s", "host not found or is already in a call")
 	}
 
 	return true, nil
@@ -181,7 +181,7 @@ func (room *Room) signalGuestGet(signalServer string) error {
 	defer guestSignal.Body.Close()
 
 	if guestSignal.StatusCode != http.StatusOK {
-		return fmt.Errorf("getting guest signal: %s\n", "response code / host does not exist")
+		return fmt.Errorf("getting guest signal: %s", "host not found or is already in a call")
 	}
 
 	guestSignalBody := struct {
@@ -189,7 +189,7 @@ func (room *Room) signalGuestGet(signalServer string) error {
 		Candidates  []string `json:"candidates"`
 	}{}
 	if err := json.NewDecoder(guestSignal.Body).Decode(&guestSignalBody); err != nil {
-		return fmt.Errorf("while setting up hostId with signalling server: %s\n", err)
+		return fmt.Errorf("while setting up hostId with signalling server: %s", err)
 	}
 
 	room.remoteSessionDescription = guestSignalBody.Description
