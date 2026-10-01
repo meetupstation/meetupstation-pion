@@ -21,6 +21,7 @@ func main() {
 	var mediaStream MediaStream
 
 	room.nextPeerConnectionId = 0
+	room.signalAccessKey = ""
 
 	if len(os.Args) != 4 ||
 		(os.Args[1] != "host" && os.Args[1] != "guest") {
@@ -49,20 +50,27 @@ func main() {
 		<-interruptChannel
 		err := mediaStream.closeRemoteStreams()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to close remote streams\n")
+			fmt.Fprintf(os.Stderr, "close remote streams: %s\n", err)
+		}
+		err = mediaStream.closeLocalStreams()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "close local streams: %s\n", err)
 		}
 		os.Exit(0)
 	}()
 
-	go mediaStream.sendLocal(&room, MediaTypeAudio, 4000)
-	go mediaStream.sendLocal(&room, MediaTypeVideo, 4002)
-
-	room.signalAccessKey = ""
-
 	var err error
-	err = mediaStream.initializeRemoteStreams()
+	err = mediaStream.initializeLocalStreams(4000, 4002)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to initialize remote streams\n")
+		fmt.Fprintf(os.Stderr, "initialize local streams: %s\n", err)
+		return
+	}
+	go mediaStream.sendLocal(&room, MediaTypeAudio)
+	go mediaStream.sendLocal(&room, MediaTypeVideo)
+
+	err = mediaStream.initializeRemoteStreams(4004, 4006)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "initialize remote streams: %s\n", err)
 		return
 	}
 
@@ -99,13 +107,13 @@ func main() {
 			continue
 		}
 
-		fmt.Fprintf(os.Stdout, "conn %d: waiting for ice connection\n", peerConnectionId)
+		fmt.Fprintf(os.Stdout, "conn %d: polling/waiting for ice connection\n", peerConnectionId)
 
 		err = room.waitForIceConnected(peerConnectionId, signalServer)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "conn %d: %s\n", peerConnectionId, err)
 		} else if room.meetingType == MeetingTypeGuest {
-			fmt.Fprintf(os.Stdout, "conn %d: waiting for ice disconnection\n", peerConnectionId)
+			fmt.Fprintf(os.Stdout, "conn %d: polling/waiting for ice disconnection\n", peerConnectionId)
 			err = room.waitForIceDisconnected(peerConnectionId, signalServer)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "conn %d: %s\n", peerConnectionId, err)

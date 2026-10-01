@@ -18,35 +18,36 @@ type MediaStream struct {
 	remoteAudioTrack      *webrtc.TrackRemote
 	remoteVideoMutex      sync.Mutex
 	remoteAudioMutex      sync.Mutex
+	localVideoListener    *net.UDPConn
+	localAudioListener    *net.UDPConn
 }
 
-func (mediaStream *MediaStream) initializeRemoteStreams() error {
-	var localAddress *net.UDPAddr
+func (mediaStream *MediaStream) initializeRemoteStreams(audioPort int, videoPort int) error {
 	var err error
-
-	localAddress, err = net.ResolveUDPAddr("udp", "127.0.0.1:")
-	if err != nil {
-		panic(fmt.Sprintf("logic: net.ResolveUDPAddr for local - %s", err))
-	}
-
-	var remoteAddressAudio *net.UDPAddr
-	remoteAddressAudio, err = net.ResolveUDPAddr("udp", "127.0.0.1:4004")
-	if err != nil {
-		panic(fmt.Sprintf("logic: net.ResolveUDPAddr for remote audio - %s", err))
-	}
-
-	mediaStream.remoteAudioConnection, err = net.DialUDP("udp", localAddress, remoteAddressAudio)
+	mediaStream.remoteAudioConnection, err = net.DialUDP(
+		"udp",
+		&net.UDPAddr{
+			IP:   net.ParseIP("127.0.0.1"),
+			Port: 0,
+		},
+		&net.UDPAddr{
+			IP:   net.ParseIP("127.0.0.1"),
+			Port: audioPort,
+		})
 	if err != nil {
 		return err
 	}
 
-	var remoteAddressVideo *net.UDPAddr
-	remoteAddressVideo, err = net.ResolveUDPAddr("udp", "127.0.0.1:4006")
-	if err != nil {
-		panic(fmt.Sprintf("logic: net.ResolveUDPAddr for remote video - %s", err))
-	}
-
-	mediaStream.remoteVideoConnection, err = net.DialUDP("udp", localAddress, remoteAddressVideo)
+	mediaStream.remoteVideoConnection, err = net.DialUDP(
+		"udp",
+		&net.UDPAddr{
+			IP:   net.ParseIP("127.0.0.1"),
+			Port: 0,
+		},
+		&net.UDPAddr{
+			IP:   net.ParseIP("127.0.0.1"),
+			Port: videoPort,
+		})
 	if err != nil {
 		return err
 	}
@@ -77,37 +78,75 @@ func (mediaStream *MediaStream) closeRemoteStreams() error {
 	return nil
 }
 
-func (mediaStream *MediaStream) sendLocal(room *Room, mediaType MediaType, port int) {
-	listener, err := net.ListenUDP(
+func (mediaStream *MediaStream) initializeLocalStreams(audioPort int, videoPort int) error {
+	var err error
+	mediaStream.localAudioListener, err = net.ListenUDP(
 		"udp",
 		&net.UDPAddr{
 			IP:   net.ParseIP("127.0.0.1"),
-			Port: port,
+			Port: audioPort,
 		})
-
 	if err != nil {
-		fmt.Fprintf(os.Stderr,
-			"net.ListenUDP, %s\n",
-			err)
+		return err
 	}
 
-	defer func() {
-		if err = listener.Close(); err != nil {
-			fmt.Fprintf(os.Stderr,
-				"listener.Close, %s\n",
-				err)
-		}
-	}()
+	mediaStream.localVideoListener, err = net.ListenUDP(
+		"udp",
+		&net.UDPAddr{
+			IP:   net.ParseIP("127.0.0.1"),
+			Port: videoPort,
+		})
+	if err != nil {
+		return err
+	}
 
 	// Increase the UDP receive buffer size
 	// Default UDP buffer sizes vary on different operating systems
 	bufferSize := 300000 // 300KB
-	err = listener.SetReadBuffer(bufferSize)
+	err = mediaStream.localAudioListener.SetReadBuffer(bufferSize)
 	if err != nil {
-		fmt.Fprintf(os.Stderr,
-			"listener.SetReadBuffer, %s\n",
-			err)
+		return err
 	}
+	err = mediaStream.localVideoListener.SetReadBuffer(bufferSize)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (mediaStream *MediaStream) closeLocalStreams() error {
+
+	if mediaStream.localAudioListener != nil {
+		err := mediaStream.localAudioListener.Close()
+		mediaStream.localAudioListener = nil
+
+		if err != nil {
+			return err
+		}
+	}
+
+	if mediaStream.localVideoListener != nil {
+		err := mediaStream.localVideoListener.Close()
+		mediaStream.localVideoListener = nil
+
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (mediaStream *MediaStream) sendLocal(room *Room, mediaType MediaType) {
+
+	listener := func(mediaType MediaType) *net.UDPConn {
+		if mediaType == MediaTypeAudio {
+			return mediaStream.localAudioListener
+		} else {
+			return mediaStream.localVideoListener
+		}
+	}(mediaType)
 
 	inboundRTPPacket := make([]byte, 1600) // UDP MTU
 	for {
