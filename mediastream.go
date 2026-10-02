@@ -205,6 +205,7 @@ func (mediaStream *MediaStream) receiveRemote(mediaType MediaType) {
 			}(mediaType)
 
 		if track == nil {
+			time.Sleep(time.Second)
 			continue
 		}
 		if connection == nil {

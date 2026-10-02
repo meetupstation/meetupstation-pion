@@ -89,7 +89,7 @@ func main() {
 		mediaStream.remoteAudioTrack = nil
 
 		peerConnectionId := room.nextPeerConnectionId
-		fmt.Fprintf(os.Stdout, "conn %d, starting in a second...\n", peerConnectionId)
+		fmt.Fprintf(os.Stdout, "conn %d: starting in a second...\n", peerConnectionId)
 		time.Sleep(time.Second)
 
 		err = room.initializePeerConnection()
