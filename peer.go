@@ -8,39 +8,44 @@ import (
 )
 
 type Peer struct {
-	peerConnection   *webrtc.PeerConnection
-	peerConnectionId int
-	localVideoTrack  *webrtc.TrackLocalStaticRTP
-	localAudioTrack  *webrtc.TrackLocalStaticRTP
-	dataChannel      *webrtc.DataChannel
-	room             *Room
-	connectedChannel chan bool
+	peerConnection     *webrtc.PeerConnection
+	peerConnectionId   int
+	localVideoTrack    *webrtc.TrackLocalStaticRTP
+	localAudioTrack    *webrtc.TrackLocalStaticRTP
+	dataChannel        *webrtc.DataChannel
+	room               *Room
+	connectedChannelOK bool
+	connectedChannel   chan bool
 }
 
 func (peer *Peer) onICEConnectionStateChange(connectionState webrtc.ICEConnectionState) {
-	peerIndex := 0
-
 	fmt.Fprintf(os.Stderr,
 		"conn %d: state - %s\n",
 		peer.peerConnectionId,
 		connectionState.String())
 
 	if connectionState == webrtc.ICEConnectionStateConnected {
-		peer.connectedChannel <- true
+		if peer.connectedChannelOK {
+			peer.connectedChannel <- true
+		} else {
+			close(peer.connectedChannel)
+		}
 	}
 	if connectionState == webrtc.ICEConnectionStateFailed ||
 		connectionState == webrtc.ICEConnectionStateDisconnected ||
 		connectionState == webrtc.ICEConnectionStateClosed {
 
 		if peer.peerConnection != nil {
-			peer.connectedChannel <- false
+			if peer.connectedChannelOK {
+				peer.connectedChannel <- false
+			}
 			close(peer.connectedChannel)
 		}
-		peer.close(peerIndex)
+		peer.close()
 	}
 }
 
-func (peer *Peer) close(index int) {
+func (peer *Peer) close() {
 	if peer.peerConnection != nil {
 		err := peer.peerConnection.Close()
 		peer.peerConnection = nil
@@ -48,7 +53,7 @@ func (peer *Peer) close(index int) {
 		if err != nil {
 			fmt.Fprintf(os.Stderr,
 				"conn %d: peerConnection.Close - %s\n",
-				index,
+				peer.peerConnectionId,
 				err)
 		}
 	}
@@ -61,10 +66,10 @@ func (peer *Peer) close(index int) {
 		peer.localAudioTrack = nil
 	}
 
-	peer.closeDataChannel(index)
+	peer.closeDataChannel()
 }
 
-func (peer *Peer) closeDataChannel(index int) {
+func (peer *Peer) closeDataChannel() {
 	if peer.dataChannel != nil {
 		peer.dataChannel.OnMessage(func(message webrtc.DataChannelMessage) {
 		})
@@ -75,7 +80,7 @@ func (peer *Peer) closeDataChannel(index int) {
 		if err != nil {
 			fmt.Fprintf(os.Stderr,
 				"conn %d: dataChannel.Close - %s\n",
-				index,
+				peer.peerConnectionId,
 				err)
 		}
 	}

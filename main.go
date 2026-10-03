@@ -112,12 +112,15 @@ func main() {
 		err = room.waitForIceConnected(peerConnectionId, signalServer)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "conn %d: %s\n", peerConnectionId, err)
+			continue
 		} else if room.meetingType == MeetingTypeGuest {
 			fmt.Fprintf(os.Stdout, "conn %d: polling/waiting for ice disconnection\n", peerConnectionId)
 			err = room.waitForIceDisconnected(peerConnectionId, signalServer)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "conn %d: %s\n", peerConnectionId, err)
 			}
+		} else if room.meetingType == MeetingTypeHost {
+			room.getPeer(peerConnectionId).connectedChannelOK = false
 		}
 	}
 }
