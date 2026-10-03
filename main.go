@@ -61,22 +61,22 @@ func main() {
 	}()
 
 	var err error
-	// err = mediaStream.initializeLocalStreams(4000, 4002)
-	// if err != nil {
-	// 	fmt.Fprintf(os.Stderr, "Error: initialize local streams: %s\n", err)
-	// 	return
-	// }
-	// go mediaStream.sendLocal(&room, MediaTypeAudio)
-	// go mediaStream.sendLocal(&room, MediaTypeVideo)
+	err = mediaStream.initializeLocalStreams(4000, 4002)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: initialize local streams: %s\n", err)
+		return
+	}
+	go mediaStream.sendLocal(&room, MediaTypeAudio)
+	go mediaStream.sendLocal(&room, MediaTypeVideo)
 
-	// err = mediaStream.initializeRemoteStreams(4004, 4006)
-	// if err != nil {
-	// 	fmt.Fprintf(os.Stderr, "Error: initialize remote streams: %s\n", err)
-	// 	return
-	// }
+	err = mediaStream.initializeRemoteStreams(4004, 4006)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: initialize remote streams: %s\n", err)
+		return
+	}
 
-	// go mediaStream.receiveRemote(MediaTypeAudio)
-	// go mediaStream.receiveRemote(MediaTypeVideo)
+	go mediaStream.receiveRemote(MediaTypeAudio)
+	go mediaStream.receiveRemote(MediaTypeVideo)
 
 	for {
 		room.signallingComplete = false
