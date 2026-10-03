@@ -29,6 +29,7 @@ type Room struct {
 	meetingType              MeetingType
 	signalId                 string
 	waitForAllICECandidates  <-chan struct{}
+	signallingComplete       bool
 }
 
 func (room *Room) appendPeer(peer *Peer) {
@@ -157,14 +158,13 @@ func (room *Room) initializePeerConnection() error {
 	}
 
 	peer := Peer{
-		peerConnection:     peerConnection,
-		peerConnectionId:   room.nextPeerConnectionId,
-		localVideoTrack:    localVideoTrack,
-		localAudioTrack:    localAudioTrack,
-		dataChannel:        dataChannel,
-		room:               room,
-		connectedChannel:   make(chan bool),
-		signallingComplete: false,
+		peerConnection:   peerConnection,
+		peerConnectionId: room.nextPeerConnectionId,
+		localVideoTrack:  localVideoTrack,
+		localAudioTrack:  localAudioTrack,
+		dataChannel:      dataChannel,
+		room:             room,
+		connectedChannel: make(chan bool),
 	}
 	room.appendPeer(&peer)
 
@@ -259,8 +259,8 @@ func (room *Room) waitForIceConnected(peerConnectionId uint64,
 				return fmt.Errorf("ice disconnected")
 			}
 		case <-time.After(stepWait * time.Millisecond):
-			if !room.getPeer(peerConnectionId).signallingComplete {
-				room.getPeer(peerConnectionId).signallingComplete, err = room.signalOperations(signalServer, peerConnectionId)
+			if len(signalServer) != 0 && !room.signallingComplete {
+				room.signallingComplete, err = room.signalOperations(signalServer, peerConnectionId)
 				if err != nil {
 					return err
 				}
@@ -286,8 +286,8 @@ func (room *Room) waitForIceDisconnected(peerConnectionId uint64,
 				return fmt.Errorf("ice connected")
 			}
 		case <-time.After(stepWait * time.Millisecond):
-			if !room.getPeer(peerConnectionId).signallingComplete {
-				room.getPeer(peerConnectionId).signallingComplete, err = room.signalOperations(signalServer, peerConnectionId)
+			if len(signalServer) != 0 && !room.signallingComplete {
+				room.signallingComplete, err = room.signalOperations(signalServer, peerConnectionId)
 				if err != nil {
 					return err
 				}

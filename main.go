@@ -79,6 +79,7 @@ func main() {
 	go mediaStream.receiveRemote(MediaTypeVideo)
 
 	for {
+		room.signallingComplete = false
 		room.localSessionDescription = ""
 		room.localCandidates = []string{}
 		room.remoteSessionDescription = ""
@@ -123,8 +124,12 @@ func main() {
 			continue
 		}
 
-		waitForDisconnected := func() {
-			err = room.waitForIceDisconnected(peerConnectionId, signalServer)
+		waitForDisconnected := func(allowSignalling bool) {
+			signalServerLocal := ""
+			if allowSignalling {
+				signalServerLocal = signalServer
+			}
+			err = room.waitForIceDisconnected(peerConnectionId, signalServerLocal)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "conn %d: %s\n", peerConnectionId, err)
 			}
@@ -134,11 +139,10 @@ func main() {
 		switch room.meetingType {
 		case MeetingTypeGuest:
 			fmt.Fprintf(os.Stdout, "conn %d: signalling/waiting for ice disconnection\n", peerConnectionId)
-			waitForDisconnected()
+			waitForDisconnected(true)
 		case MeetingTypeHost:
-			room.getPeer(peerConnectionId).signallingComplete = true
 			fmt.Fprintf(os.Stdout, "conn %d: waiting for ice disconnection in a goroutine\n", peerConnectionId)
-			go waitForDisconnected()
+			go waitForDisconnected(false)
 		}
 	}
 }
