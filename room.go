@@ -158,14 +158,13 @@ func (room *Room) initializePeerConnection() error {
 	}
 
 	peer := Peer{
-		peerConnection:     peerConnection,
-		peerConnectionId:   room.nextPeerConnectionId,
-		localVideoTrack:    localVideoTrack,
-		localAudioTrack:    localAudioTrack,
-		dataChannel:        dataChannel,
-		room:               room,
-		connectedChannelOK: true,
-		connectedChannel:   make(chan bool),
+		peerConnection:   peerConnection,
+		peerConnectionId: room.nextPeerConnectionId,
+		localVideoTrack:  localVideoTrack,
+		localAudioTrack:  localAudioTrack,
+		dataChannel:      dataChannel,
+		room:             room,
+		connectedChannel: make(chan bool),
 	}
 	room.appendPeer(&peer)
 
@@ -254,21 +253,18 @@ func (room *Room) waitForIceConnected(peerConnectionId int,
 			if connected {
 				return nil
 			} else {
-				room.getPeer(peerConnectionId).connectedChannelOK = false
 				return fmt.Errorf("ice disconnected")
 			}
 		case <-time.After(stepWait * time.Millisecond):
 			if !room.signallingComplete {
 				room.signallingComplete, err = room.signalOperations(signalServer, peerConnectionId)
 				if err != nil {
-					room.getPeer(peerConnectionId).connectedChannelOK = false
 					return err
 				}
 			}
 		}
 	}
 
-	room.getPeer(peerConnectionId).connectedChannelOK = false
 	return fmt.Errorf("ice connection time out")
 }
 
@@ -284,14 +280,12 @@ func (room *Room) waitForIceDisconnected(peerConnectionId int,
 			if !connected {
 				return nil
 			} else {
-				room.getPeer(peerConnectionId).connectedChannelOK = false
 				return fmt.Errorf("ice connected")
 			}
 		case <-time.After(stepWait * time.Millisecond):
 			if !room.signallingComplete {
 				room.signallingComplete, err = room.signalOperations(signalServer, peerConnectionId)
 				if err != nil {
-					room.getPeer(peerConnectionId).connectedChannelOK = false
 					return err
 				}
 			}
