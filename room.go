@@ -17,10 +17,10 @@ const (
 )
 
 type Room struct {
-	peers                    []*Peer
+	peers                    map[uint64]*Peer
 	peerIndex                int
 	signalAccessKey          string
-	nextPeerConnectionId     int
+	nextPeerConnectionId     uint64
 	localSessionDescription  string
 	localCandidates          []string
 	remoteSessionDescription string
@@ -28,7 +28,6 @@ type Room struct {
 	mutex                    sync.Mutex
 	meetingType              MeetingType
 	signalId                 string
-	signallingComplete       bool
 	waitForAllICECandidates  <-chan struct{}
 }
 
@@ -36,10 +35,10 @@ func (room *Room) appendPeer(peer *Peer) {
 	room.mutex.Lock()
 	defer room.mutex.Unlock()
 
-	room.peers = append(room.peers, peer)
+	room.peers[peer.peerConnectionId] = peer
 }
 
-func (room *Room) getPeer(peerconnectionId int) *Peer {
+func (room *Room) getPeer(peerconnectionId uint64) *Peer {
 	room.mutex.Lock()
 	defer room.mutex.Unlock()
 
@@ -158,13 +157,14 @@ func (room *Room) initializePeerConnection() error {
 	}
 
 	peer := Peer{
-		peerConnection:   peerConnection,
-		peerConnectionId: room.nextPeerConnectionId,
-		localVideoTrack:  localVideoTrack,
-		localAudioTrack:  localAudioTrack,
-		dataChannel:      dataChannel,
-		room:             room,
-		connectedChannel: make(chan bool),
+		peerConnection:     peerConnection,
+		peerConnectionId:   room.nextPeerConnectionId,
+		localVideoTrack:    localVideoTrack,
+		localAudioTrack:    localAudioTrack,
+		dataChannel:        dataChannel,
+		room:               room,
+		connectedChannel:   make(chan bool),
+		signallingComplete: false,
 	}
 	room.appendPeer(&peer)
 
@@ -173,7 +173,12 @@ func (room *Room) initializePeerConnection() error {
 	return nil
 }
 
-func (room *Room) setupTracksAndDataHandlers(mediaStream *MediaStream, peerConnectionId int) {
+func (room *Room) closePeer(peerConnectionId uint64) {
+	room.getPeer(peerConnectionId).close()
+	delete(room.peers, peerConnectionId)
+}
+
+func (room *Room) setupTracksAndDataHandlers(mediaStream *MediaStream, peerConnectionId uint64) {
 	peer := room.getPeer(peerConnectionId)
 
 	peer.peerConnection.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
@@ -203,7 +208,7 @@ func (room *Room) setupTracksAndDataHandlers(mediaStream *MediaStream, peerConne
 
 func (room *Room) prepareGuestAnswerOrHostOffer(
 	mediaStream *MediaStream,
-	peerConnectionId int,
+	peerConnectionId uint64,
 	signalServer string) error {
 
 	room.setupTracksAndDataHandlers(mediaStream, peerConnectionId)
@@ -236,17 +241,15 @@ func (room *Room) prepareGuestAnswerOrHostOffer(
 	return nil
 }
 
-func (room *Room) waitForIceConnected(peerConnectionId int,
+func (room *Room) waitForIceConnected(peerConnectionId uint64,
 	signalServer string) error {
 	const stepWait = 50
-	const timeOut = 20 * 1000 / stepWait
 
-	steps := 0
+	start := time.Now()
 
 	var err error
 
-	for steps < timeOut {
-		steps++
+	for time.Since(start) < 20*time.Second {
 
 		select {
 		case connected := <-room.getPeer(peerConnectionId).connectedChannel:
@@ -256,8 +259,8 @@ func (room *Room) waitForIceConnected(peerConnectionId int,
 				return fmt.Errorf("ice disconnected")
 			}
 		case <-time.After(stepWait * time.Millisecond):
-			if !room.signallingComplete {
-				room.signallingComplete, err = room.signalOperations(signalServer, peerConnectionId)
+			if !room.getPeer(peerConnectionId).signallingComplete {
+				room.getPeer(peerConnectionId).signallingComplete, err = room.signalOperations(signalServer, peerConnectionId)
 				if err != nil {
 					return err
 				}
@@ -268,7 +271,7 @@ func (room *Room) waitForIceConnected(peerConnectionId int,
 	return fmt.Errorf("ice connection time out")
 }
 
-func (room *Room) waitForIceDisconnected(peerConnectionId int,
+func (room *Room) waitForIceDisconnected(peerConnectionId uint64,
 	signalServer string) error {
 	const stepWait = 50
 
@@ -283,8 +286,8 @@ func (room *Room) waitForIceDisconnected(peerConnectionId int,
 				return fmt.Errorf("ice connected")
 			}
 		case <-time.After(stepWait * time.Millisecond):
-			if !room.signallingComplete {
-				room.signallingComplete, err = room.signalOperations(signalServer, peerConnectionId)
+			if !room.getPeer(peerConnectionId).signallingComplete {
+				room.getPeer(peerConnectionId).signallingComplete, err = room.signalOperations(signalServer, peerConnectionId)
 				if err != nil {
 					return err
 				}
@@ -294,7 +297,7 @@ func (room *Room) waitForIceDisconnected(peerConnectionId int,
 }
 
 func (room *Room) signalOperations(signalServer string,
-	peerConnectionId int) (bool, error) {
+	peerConnectionId uint64) (bool, error) {
 	if room.meetingType == MeetingTypeHost {
 		return room.signalHostOperations(signalServer, peerConnectionId)
 	} else {
@@ -303,13 +306,14 @@ func (room *Room) signalOperations(signalServer string,
 }
 
 func (room *Room) signalGuestOperations(signalServer string,
-	peerConnectionId int) (bool, error) {
+	peerConnectionId uint64) (bool, error) {
 
 	signallingComplete, err := room.signalHostGet(signalServer)
 	if err != nil && signallingComplete == false {
 		return signallingComplete, err
 	}
 	if len(room.localSessionDescription) != 0 || (err != nil && signallingComplete == true) {
+		signallingComplete = false
 		room.signalAccessKey = ""
 		return signallingComplete, nil
 	}
@@ -361,6 +365,7 @@ func (room *Room) signalGuestOperations(signalServer string,
 			return signallingComplete, err
 		}
 		if len(room.localSessionDescription) != 0 || (err != nil && signallingComplete == true) {
+			signallingComplete = false
 			room.signalAccessKey = ""
 		}
 		room.localSessionDescription = ""
@@ -372,7 +377,7 @@ func (room *Room) signalGuestOperations(signalServer string,
 
 func (room *Room) signalHostOperations(
 	signalServer string,
-	peerConnectionId int) (bool, error) {
+	peerConnectionId uint64) (bool, error) {
 
 	var err error
 

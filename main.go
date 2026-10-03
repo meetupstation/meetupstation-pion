@@ -22,6 +22,7 @@ func main() {
 
 	room.nextPeerConnectionId = 0
 	room.signalAccessKey = ""
+	room.peers = make(map[uint64]*Peer)
 
 	if len(os.Args) != 4 ||
 		(os.Args[1] != "host" && os.Args[1] != "guest") {
@@ -82,54 +83,62 @@ func main() {
 		room.localCandidates = []string{}
 		room.remoteSessionDescription = ""
 		room.remoteCandidates = []string{}
-		room.signallingComplete = false
 		room.waitForAllICECandidates = nil
 
 		mediaStream.remoteVideoTrack = nil
 		mediaStream.remoteAudioTrack = nil
 
 		peerConnectionId := room.nextPeerConnectionId
-		fmt.Fprintf(os.Stdout, "conn %d: starting in a second...\n", peerConnectionId)
-		time.Sleep(time.Second)
 
 		err = room.initializePeerConnection()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "conn %d: %s\n", peerConnectionId, err)
 			continue
 		}
-		room.nextPeerConnectionId++
+
+		for {
+			if _, ok := room.peers[room.nextPeerConnectionId]; !ok {
+				break
+			}
+
+			room.nextPeerConnectionId++
+		}
 
 		fmt.Fprintf(os.Stdout, "conn %d: setting up tracks and data handlers\n", peerConnectionId)
 
 		err = room.prepareGuestAnswerOrHostOffer(&mediaStream, peerConnectionId, signalServer)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "conn %d: %s\n", peerConnectionId, err)
+			time.Sleep(time.Second)
 			continue
 		}
 
-		fmt.Fprintf(os.Stdout, "conn %d: polling/waiting for ice connection\n", peerConnectionId)
+		fmt.Fprintf(os.Stdout, "conn %d: signalling/waiting for ice connection\n", peerConnectionId)
 
 		err = room.waitForIceConnected(peerConnectionId, signalServer)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "conn %d: %s\n", peerConnectionId, err)
-			room.getPeer(peerConnectionId).close()
-		} else if room.meetingType == MeetingTypeGuest {
-			fmt.Fprintf(os.Stdout, "conn %d: polling/waiting for ice disconnection\n", peerConnectionId)
+			room.closePeer(peerConnectionId)
+			time.Sleep(time.Second)
+			continue
+		}
+
+		waitForDisconnected := func() {
 			err = room.waitForIceDisconnected(peerConnectionId, signalServer)
 			if err != nil {
-				room.getPeer(peerConnectionId).close()
 				fmt.Fprintf(os.Stderr, "conn %d: %s\n", peerConnectionId, err)
 			}
-		} else if room.meetingType == MeetingTypeHost {
-			go func() {
-				fmt.Fprintf(os.Stdout, "conn %d: polling/waiting for ice disconnection in a goroutine\n", peerConnectionId)
-				room.getPeer(peerConnectionId).room.signallingComplete = true
-				err = room.waitForIceDisconnected(peerConnectionId, signalServer)
-				if err != nil {
-					room.getPeer(peerConnectionId).close()
-					fmt.Fprintf(os.Stderr, "conn %d: %s\n", peerConnectionId, err)
-				}
-			}()
+			room.closePeer(peerConnectionId)
+		}
+
+		switch room.meetingType {
+		case MeetingTypeGuest:
+			fmt.Fprintf(os.Stdout, "conn %d: signalling/waiting for ice disconnection\n", peerConnectionId)
+			waitForDisconnected()
+		case MeetingTypeHost:
+			room.getPeer(peerConnectionId).signallingComplete = true
+			fmt.Fprintf(os.Stdout, "conn %d: waiting for ice disconnection in a goroutine\n", peerConnectionId)
+			go waitForDisconnected()
 		}
 	}
 }

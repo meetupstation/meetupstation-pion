@@ -8,18 +8,19 @@ import (
 )
 
 type Peer struct {
-	peerConnection   *webrtc.PeerConnection
-	peerConnectionId int
-	localVideoTrack  *webrtc.TrackLocalStaticRTP
-	localAudioTrack  *webrtc.TrackLocalStaticRTP
-	dataChannel      *webrtc.DataChannel
-	room             *Room
-	connectedChannel chan bool
+	peerConnection     *webrtc.PeerConnection
+	peerConnectionId   uint64
+	localVideoTrack    *webrtc.TrackLocalStaticRTP
+	localAudioTrack    *webrtc.TrackLocalStaticRTP
+	dataChannel        *webrtc.DataChannel
+	room               *Room
+	connectedChannel   chan bool
+	signallingComplete bool
 }
 
 func (peer *Peer) onICEConnectionStateChange(connectionState webrtc.ICEConnectionState) {
 	fmt.Fprintf(os.Stderr,
-		"conn %d: state - %s\n",
+		"conn %d: state: %s\n",
 		peer.peerConnectionId,
 		connectionState.String())
 
@@ -35,7 +36,6 @@ func (peer *Peer) onICEConnectionStateChange(connectionState webrtc.ICEConnectio
 		if peer.peerConnection != nil {
 			peer.connectedChannel <- false
 		}
-		peer.close()
 	}
 }
 
