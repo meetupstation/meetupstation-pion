@@ -26,7 +26,7 @@ func main() {
 
 	if len(os.Args) != 4 ||
 		(os.Args[1] != "host" && os.Args[1] != "guest") {
-		fmt.Fprintf(os.Stderr,
+		fmt.Fprintf(os.Stdout,
 			"example usage: ./meetupstation-pion [host,guest] https://meetupstation.com \"secret host room id\"\n")
 		return
 	}
@@ -51,11 +51,11 @@ func main() {
 		<-interruptChannel
 		err := mediaStream.closeRemoteStreams()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "close remote streams: %s\n", err)
+			fmt.Fprintf(os.Stderr, "Error: close remote streams: %s\n", err)
 		}
 		err = mediaStream.closeLocalStreams()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "close local streams: %s\n", err)
+			fmt.Fprintf(os.Stderr, "Error: close local streams: %s\n", err)
 		}
 		os.Exit(0)
 	}()
@@ -63,7 +63,7 @@ func main() {
 	var err error
 	err = mediaStream.initializeLocalStreams(4000, 4002)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "initialize local streams: %s\n", err)
+		fmt.Fprintf(os.Stderr, "Error: initialize local streams: %s\n", err)
 		return
 	}
 	go mediaStream.sendLocal(&room, MediaTypeAudio)
@@ -71,7 +71,7 @@ func main() {
 
 	err = mediaStream.initializeRemoteStreams(4004, 4006)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "initialize remote streams: %s\n", err)
+		fmt.Fprintf(os.Stderr, "Error: initialize remote streams: %s\n", err)
 		return
 	}
 
@@ -93,7 +93,7 @@ func main() {
 
 		err = room.initializePeerConnection()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "conn %d: %s\n", peerConnectionId, err)
+			fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
 			continue
 		}
 
@@ -109,7 +109,7 @@ func main() {
 
 		err = room.prepareGuestAnswerOrHostOffer(&mediaStream, peerConnectionId, signalServer)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "conn %d: %s\n", peerConnectionId, err)
+			fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
 			time.Sleep(time.Second)
 			continue
 		}
@@ -118,7 +118,7 @@ func main() {
 
 		err = room.waitForIceConnected(peerConnectionId, signalServer)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "conn %d: %s\n", peerConnectionId, err)
+			fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
 			room.closePeer(peerConnectionId)
 			time.Sleep(time.Second)
 			continue
@@ -131,7 +131,7 @@ func main() {
 			}
 			err = room.waitForIceDisconnected(peerConnectionId, signalServerLocal)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "conn %d: %s\n", peerConnectionId, err)
+				fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
 			}
 			room.closePeer(peerConnectionId)
 		}
