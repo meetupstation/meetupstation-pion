@@ -108,7 +108,7 @@ func (room *Room) signalHostGet(signalServer string) (bool, error) {
 	room.remoteCandidates = hostSignalBody.Candidates
 	room.signalAccessKey = hostSignalBody.AccessKey
 
-	return true, nil
+	return false, nil
 }
 
 func (room *Room) signalGuestPost(signalServer string) (bool, error) {
