@@ -239,7 +239,7 @@ func (room *Room) prepareGuestAnswerOrHostOffer(
 func (room *Room) waitForIceConnected(peerConnectionId int,
 	signalServer string) error {
 	const stepWait = 50
-	const timeOut = 60 * 1000 / stepWait
+	const timeOut = 20 * 1000 / stepWait
 
 	steps := 0
 

@@ -123,6 +123,7 @@ func main() {
 		} else if room.meetingType == MeetingTypeHost {
 			go func() {
 				fmt.Fprintf(os.Stdout, "conn %d: polling/waiting for ice disconnection in a goroutine\n", peerConnectionId)
+				room.getPeer(peerConnectionId).room.signallingComplete = true
 				err = room.waitForIceDisconnected(peerConnectionId, signalServer)
 				if err != nil {
 					room.getPeer(peerConnectionId).close()
