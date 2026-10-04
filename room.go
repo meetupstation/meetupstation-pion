@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/webrtc/v4"
@@ -17,31 +18,45 @@ const (
 )
 
 type Room struct {
-	peers                    map[uint64]*Peer
-	peerIndex                int
-	signalAccessKey          string
-	nextPeerConnectionId     uint64
-	localSessionDescription  string
-	localCandidates          []string
-	remoteSessionDescription string
-	remoteCandidates         []string
-	mutex                    sync.Mutex
-	meetingType              MeetingType
-	signalId                 string
-	waitForAllICECandidates  <-chan struct{}
-	signallingComplete       bool
+	peers             map[uint64]*Peer
+	peersMutex        sync.RWMutex
+	_peerConnectionId uint64
+	meetingType       MeetingType
+}
+
+func (room *Room) init(meetingType MeetingType) {
+	room._peerConnectionId = 0
+	room.peers = make(map[uint64]*Peer)
+	room.meetingType = meetingType
+}
+func (room *Room) getAndUpdatePeerConnectionId() uint64 {
+	peerConnectionId := room._peerConnectionId
+
+	room.peersMutex.RLock()
+	defer room.peersMutex.RUnlock()
+
+	room._peerConnectionId++
+	for {
+		if _, ok := room.peers[room._peerConnectionId]; !ok {
+			break
+		}
+
+		room._peerConnectionId++
+	}
+
+	return peerConnectionId
 }
 
 func (room *Room) appendPeer(peer *Peer) {
-	room.mutex.Lock()
-	defer room.mutex.Unlock()
+	room.peersMutex.Lock()
+	defer room.peersMutex.Unlock()
 
 	room.peers[peer.peerConnectionId] = peer
 }
 
 func (room *Room) getPeer(peerconnectionId uint64) *Peer {
-	room.mutex.Lock()
-	defer room.mutex.Unlock()
+	room.peersMutex.RLock()
+	defer room.peersMutex.RUnlock()
 
 	return room.peers[peerconnectionId]
 }
@@ -145,7 +160,7 @@ func startPeerConnection() (
 		nil
 }
 
-func (room *Room) initializePeerConnection() error {
+func (room *Room) initializePeerConnection(peerConnectionId uint64) error {
 
 	peerConnection,
 		localVideoTrack,
@@ -159,11 +174,10 @@ func (room *Room) initializePeerConnection() error {
 
 	peer := Peer{
 		peerConnection:   peerConnection,
-		peerConnectionId: room.nextPeerConnectionId,
+		peerConnectionId: peerConnectionId,
 		localVideoTrack:  localVideoTrack,
 		localAudioTrack:  localAudioTrack,
 		dataChannel:      dataChannel,
-		room:             room,
 		connectedChannel: make(chan bool),
 	}
 	room.appendPeer(&peer)
@@ -173,9 +187,15 @@ func (room *Room) initializePeerConnection() error {
 	return nil
 }
 
-func (room *Room) closePeer(peerConnectionId uint64) {
-	room.getPeer(peerConnectionId).close()
+func (room *Room) closePeer(peerConnectionId uint64) error {
+	peer := room.getPeer(peerConnectionId)
+
+	err := peer.close()
+
+	room.peersMutex.Lock()
+	defer room.peersMutex.Unlock()
 	delete(room.peers, peerConnectionId)
+	return err
 }
 
 func (room *Room) setupTracksAndDataHandlers(mediaStream *MediaStream, peerConnectionId uint64) {
@@ -207,9 +227,9 @@ func (room *Room) setupTracksAndDataHandlers(mediaStream *MediaStream, peerConne
 }
 
 func (room *Room) prepareGuestAnswerOrHostOffer(
+	signalling *SignallingScope,
 	mediaStream *MediaStream,
-	peerConnectionId uint64,
-	signalServer string) error {
+	peerConnectionId uint64) error {
 
 	room.setupTracksAndDataHandlers(mediaStream, peerConnectionId)
 
@@ -217,12 +237,12 @@ func (room *Room) prepareGuestAnswerOrHostOffer(
 
 	var err error
 	if room.meetingType == MeetingTypeHost {
-		err = room.signalHostPost(signalServer)
+		err = signalling.hostPost()
 		if err != nil {
 			return err
 		}
 
-		room.waitForAllICECandidates = webrtc.GatheringCompletePromise(peer.peerConnection)
+		signalling.waitForAllICECandidates = webrtc.GatheringCompletePromise(peer.peerConnection)
 
 		offerSessionDescription, err := peer.peerConnection.CreateOffer(nil)
 
@@ -241,26 +261,27 @@ func (room *Room) prepareGuestAnswerOrHostOffer(
 	return nil
 }
 
-func (room *Room) waitForIceConnected(peerConnectionId uint64,
-	signalServer string) error {
+func (room *Room) waitForIceConnected(peer *Peer,
+	signalling *SignallingScope,
+	running *atomic.Bool) error {
 	const stepWait = 50
 
 	start := time.Now()
 
 	var err error
 
-	for time.Since(start) < 20*time.Second {
+	for time.Since(start) < 20*time.Second && running.Load() {
 
 		select {
-		case connected := <-room.getPeer(peerConnectionId).connectedChannel:
+		case connected := <-peer.connectedChannel:
 			if connected {
 				return nil
 			} else {
-				return fmt.Errorf("ice disconnected")
+				return fmt.Errorf("ice closed")
 			}
 		case <-time.After(stepWait * time.Millisecond):
-			if len(signalServer) != 0 {
-				err = room.signalOperations(signalServer, peerConnectionId)
+			if signalling != nil {
+				err = signalling.polling(peer.peerConnectionId, room.meetingType, peer.peerConnection)
 				if err != nil {
 					return err
 				}
@@ -271,165 +292,30 @@ func (room *Room) waitForIceConnected(peerConnectionId uint64,
 	return fmt.Errorf("ice connection time out")
 }
 
-func (room *Room) waitForIceDisconnected(peerConnectionId uint64,
-	signalServer string) error {
+func (room *Room) waitForIceDisconnected(peer *Peer,
+	signalling *SignallingScope,
+	running *atomic.Bool) error {
 	const stepWait = 50
 
 	var err error
 
-	for {
+	for running.Load() {
 		select {
-		case connected := <-room.getPeer(peerConnectionId).connectedChannel:
+		case connected := <-peer.connectedChannel:
 			if !connected {
 				return nil
 			} else {
 				return fmt.Errorf("ice connected")
 			}
 		case <-time.After(stepWait * time.Millisecond):
-			if len(signalServer) != 0 {
-				err = room.signalOperations(signalServer, peerConnectionId)
+			if signalling != nil {
+				err = signalling.polling(peer.peerConnectionId, room.meetingType, peer.peerConnection)
 				if err != nil {
 					return err
 				}
 			}
 		}
 	}
-}
-
-func (room *Room) signalOperations(signalServer string,
-	peerConnectionId uint64) error {
-	if room.signallingComplete {
-		return nil
-	}
-
-	if room.meetingType == MeetingTypeHost {
-		return room.signalHostOperations(signalServer, peerConnectionId)
-	} else {
-		return room.signalGuestOperations(signalServer, peerConnectionId)
-	}
-}
-
-func (room *Room) signalGuestOperations(signalServer string,
-	peerConnectionId uint64) error {
-	if room.signallingComplete {
-		return nil
-	}
-
-	var err error
-	room.signallingComplete, err = room.signalHostGet(signalServer)
-	if err != nil {
-		room.signalAccessKey = ""
-
-		if room.signallingComplete {
-			room.signallingComplete = false
-			return nil
-		}
-		return err
-	}
-	room.signallingComplete = false
-
-	peer := room.getPeer(peerConnectionId)
-
-	if len(room.remoteSessionDescription) != 0 {
-		var sessionDescription webrtc.SessionDescription
-		decode(room.remoteSessionDescription, &sessionDescription)
-		err = peer.peerConnection.SetRemoteDescription(sessionDescription)
-		if err != nil {
-			return err
-		}
-
-		room.waitForAllICECandidates = webrtc.GatheringCompletePromise(peer.peerConnection)
-
-		answerSessionDescription, err := peer.peerConnection.CreateAnswer(nil)
-		if err != nil {
-			return err
-		}
-
-		err = peer.peerConnection.SetLocalDescription(answerSessionDescription)
-		if err != nil {
-			return err
-		}
-	} else if len(room.remoteCandidates) != 0 {
-		// for (const candidate of room.remoteCandidates) {
-		//     await peerConnection.addIceCandidate(
-		//         JSON.parse(atob(candidate))
-		//     );
-		// }
-	}
-
-	room.remoteSessionDescription = ""
-	room.remoteCandidates = []string{}
-
-	select {
-	case <-room.waitForAllICECandidates:
-		room.waitForAllICECandidates = nil
-		localDescription := peer.peerConnection.LocalDescription()
-		room.localSessionDescription = encode(localDescription)
-	default:
-	}
-
-	if len(room.localSessionDescription) != 0 || len(room.localCandidates) != 0 {
-		room.signallingComplete, err = room.signalGuestPost(signalServer)
-		// room.signallingComplete becoming true regardless of ICE trickling proper
-		// implementation might lead to no connection
-		if err != nil {
-			return err
-		}
-		room.localSessionDescription = ""
-		room.localCandidates = []string{}
-	}
-
-	return nil
-}
-
-func (room *Room) signalHostOperations(
-	signalServer string,
-	peerConnectionId uint64) error {
-	if room.signallingComplete {
-		return nil
-	}
-
-	var err error
-
-	select {
-	case <-room.waitForAllICECandidates:
-		room.waitForAllICECandidates = nil
-		localDescription := room.getPeer(peerConnectionId).peerConnection.LocalDescription()
-		room.localSessionDescription = encode(localDescription)
-	default:
-	}
-
-	if len(room.localSessionDescription) != 0 || len(room.localCandidates) != 0 {
-		err = room.signalHostPost(signalServer)
-		if err != nil {
-			room.signallingComplete = true
-			return err
-		}
-		room.localSessionDescription = ""
-		room.localCandidates = []string{}
-	}
-
-	err = room.signalGuestGet(signalServer)
-	if err != nil {
-		room.signallingComplete = true
-		return err
-	}
-
-	if len(room.remoteSessionDescription) != 0 {
-		var sessionDescription webrtc.SessionDescription
-		decode(room.remoteSessionDescription, &sessionDescription)
-		room.getPeer(peerConnectionId).peerConnection.SetRemoteDescription(sessionDescription)
-
-		room.signallingComplete = true
-	} else if len(room.remoteCandidates) != 0 {
-		// for (const candidate of room.remoteCandidates) {
-		//     await peerConnection.addIceCandidate(
-		//         JSON.parse(atob(candidate))
-		//     );
-		// }
-	}
-	room.remoteSessionDescription = ""
-	room.remoteCandidates = []string{}
 
 	return nil
 }

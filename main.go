@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -17,13 +19,6 @@ const (
 
 func main() {
 
-	var room Room
-	var mediaStream MediaStream
-
-	room.nextPeerConnectionId = 0
-	room.signalAccessKey = ""
-	room.peers = make(map[uint64]*Peer)
-
 	if len(os.Args) != 4 ||
 		(os.Args[1] != "host" && os.Args[1] != "guest") {
 		fmt.Fprintf(os.Stdout,
@@ -31,33 +26,34 @@ func main() {
 		return
 	}
 
+	var room Room
+	var roomSignalling SignallingScope
+	var mediaStream MediaStream
+
 	switch os.Args[1] {
 	case "host":
-		room.meetingType = MeetingTypeHost
+		room.init(MeetingTypeHost)
 	case "guest":
-		room.meetingType = MeetingTypeGuest
+		room.init(MeetingTypeGuest)
 	}
 
-	signalServer := os.Args[2]
-	room.signalId = os.Args[3]
+	roomSignalling.init(os.Args[2], os.Args[3])
 
-	// signalServer := "https://meetupstation.com"
-	// room.signalId = "secret room id"
-	// room.meetingType = MeetingTypeHost
+	// roomSignalling.init("https://meetupstation.com", "secret room id")
+	// room.init(MeetingTypeHost)
+
+	var running atomic.Bool
+	running.Store(true)
 
 	interruptChannel := make(chan os.Signal, 1)
 	signal.Notify(interruptChannel, os.Interrupt, syscall.SIGTERM)
+
+	var waitGroup sync.WaitGroup
+	waitGroup.Add(1)
 	go func() {
 		<-interruptChannel
-		err := mediaStream.closeRemoteStreams()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: close remote streams: %s\n", err)
-		}
-		err = mediaStream.closeLocalStreams()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: close local streams: %s\n", err)
-		}
-		os.Exit(0)
+		running.Store(false)
+		waitGroup.Done()
 	}()
 
 	var err error
@@ -66,8 +62,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: initialize local streams: %s\n", err)
 		return
 	}
-	go mediaStream.sendLocal(&room, MediaTypeAudio)
-	go mediaStream.sendLocal(&room, MediaTypeVideo)
+
+	waitGroup.Add(1)
+	go mediaStream.sendLocal(&room, MediaTypeAudio, &waitGroup, &running)
+	waitGroup.Add(1)
+	go mediaStream.sendLocal(&room, MediaTypeVideo, &waitGroup, &running)
 
 	err = mediaStream.initializeRemoteStreams(4004, 4006)
 	if err != nil {
@@ -75,39 +74,30 @@ func main() {
 		return
 	}
 
-	go mediaStream.receiveRemote(MediaTypeAudio)
-	go mediaStream.receiveRemote(MediaTypeVideo)
+	waitGroup.Add(1)
+	go mediaStream.receiveRemote(MediaTypeAudio, &waitGroup, &running)
+	waitGroup.Add(1)
+	go mediaStream.receiveRemote(MediaTypeVideo, &waitGroup, &running)
 
-	for {
-		room.signallingComplete = false
-		room.localSessionDescription = ""
-		room.localCandidates = []string{}
-		room.remoteSessionDescription = ""
-		room.remoteCandidates = []string{}
-		room.waitForAllICECandidates = nil
+	for running.Load() {
+		roomSignalling.restart()
 
 		mediaStream.remoteVideoTrack = nil
 		mediaStream.remoteAudioTrack = nil
 
-		peerConnectionId := room.nextPeerConnectionId
+		peerConnectionId := room.getAndUpdatePeerConnectionId()
 
-		err = room.initializePeerConnection()
+		err = room.initializePeerConnection(peerConnectionId)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
 			continue
 		}
 
-		for {
-			if _, ok := room.peers[room.nextPeerConnectionId]; !ok {
-				break
-			}
-
-			room.nextPeerConnectionId++
-		}
+		peer := room.getPeer(peerConnectionId)
 
 		fmt.Fprintf(os.Stdout, "conn %d: setting up tracks and data handlers\n", peerConnectionId)
 
-		err = room.prepareGuestAnswerOrHostOffer(&mediaStream, peerConnectionId, signalServer)
+		err = room.prepareGuestAnswerOrHostOffer(&roomSignalling, &mediaStream, peerConnectionId)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
 			time.Sleep(time.Second)
@@ -116,33 +106,53 @@ func main() {
 
 		fmt.Fprintf(os.Stdout, "conn %d: signalling/waiting for ice connection\n", peerConnectionId)
 
-		err = room.waitForIceConnected(peerConnectionId, signalServer)
+		err = room.waitForIceConnected(peer, &roomSignalling, &running)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
-			room.closePeer(peerConnectionId)
+			if err = room.closePeer(peerConnectionId); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
+			}
 			time.Sleep(time.Second)
 			continue
 		}
 
-		waitForDisconnected := func(allowSignalling bool) {
-			signalServerLocal := ""
-			if allowSignalling {
-				signalServerLocal = signalServer
+		waitForDisconnected := func(signalling *SignallingScope, waitGroup *sync.WaitGroup) {
+			if waitGroup != nil {
+				defer waitGroup.Done()
 			}
-			err = room.waitForIceDisconnected(peerConnectionId, signalServerLocal)
+			err = room.waitForIceDisconnected(peer, signalling, &running)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
 			}
-			room.closePeer(peerConnectionId)
+			if err = room.closePeer(peerConnectionId); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
+			}
 		}
 
 		switch room.meetingType {
 		case MeetingTypeGuest:
-			fmt.Fprintf(os.Stdout, "conn %d: signalling/waiting for ice disconnection\n", peerConnectionId)
-			waitForDisconnected(true)
+			fmt.Fprintf(os.Stdout,
+				"conn %d: signalling/waiting for ice disconnection\n",
+				peerConnectionId)
+			waitForDisconnected(&roomSignalling, nil)
 		case MeetingTypeHost:
-			fmt.Fprintf(os.Stdout, "conn %d: waiting for ice disconnection in a goroutine\n", peerConnectionId)
-			go waitForDisconnected(false)
+			fmt.Fprintf(os.Stdout,
+				"conn %d: waiting for ice disconnection in a goroutine\n",
+				peerConnectionId)
+
+			waitGroup.Add(1)
+			go waitForDisconnected(nil, &waitGroup)
 		}
+	}
+
+	waitGroup.Wait()
+
+	err = mediaStream.closeRemoteStreams()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: close remote streams: %s\n", err)
+	}
+	err = mediaStream.closeLocalStreams()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: close local streams: %s\n", err)
 	}
 }

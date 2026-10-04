@@ -11,7 +11,35 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-func (room *Room) signalHostPost(signalServer string) error {
+type SignallingScope struct {
+	id        string
+	accessKey string
+	server    string
+
+	complete                 bool
+	localSessionDescription  string
+	localCandidates          []string
+	remoteSessionDescription string
+	remoteCandidates         []string
+	waitForAllICECandidates  <-chan struct{}
+}
+
+func (room *SignallingScope) init(server string, roomId string) {
+	room.id = roomId
+	room.accessKey = ""
+	room.server = server
+}
+
+func (room *SignallingScope) restart() {
+	room.complete = false
+	room.localSessionDescription = ""
+	room.localCandidates = []string{}
+	room.remoteSessionDescription = ""
+	room.remoteCandidates = []string{}
+	room.waitForAllICECandidates = nil
+}
+
+func (room *SignallingScope) hostPost() error {
 
 	client := &http.Client{}
 
@@ -21,10 +49,10 @@ func (room *Room) signalHostPost(signalServer string) error {
 		Candidates  []string `json:"candidates"`
 		AccessKey   string   `json:"accessKey"`
 	}{
-		HostID:      room.signalId,
+		HostID:      room.id,
 		Description: room.localSessionDescription,
 		Candidates:  room.localCandidates,
-		AccessKey:   room.signalAccessKey,
+		AccessKey:   room.accessKey,
 	}
 
 	body, err := json.Marshal(payload)
@@ -33,7 +61,7 @@ func (room *Room) signalHostPost(signalServer string) error {
 	}
 
 	request, err := http.NewRequest(http.MethodPost,
-		fmt.Sprintf("%s/api/host", signalServer),
+		fmt.Sprintf("%s/api/host", room.server),
 		bytes.NewBuffer(body))
 	if err != nil {
 		return err
@@ -59,24 +87,24 @@ func (room *Room) signalHostPost(signalServer string) error {
 		return err
 	}
 
-	room.signalId = hostSignalBody.ID
-	room.signalAccessKey = hostSignalBody.AccessKey
+	room.id = hostSignalBody.ID
+	room.accessKey = hostSignalBody.AccessKey
 
 	return nil
 }
 
-func (room *Room) signalHostGet(signalServer string) (bool, error) {
+func (room *SignallingScope) hostGet() (bool, error) {
 
 	client := &http.Client{}
 
 	params := url.Values{}
-	params.Add("id", room.signalId)
-	params.Add("accessKey", room.signalAccessKey)
+	params.Add("id", room.id)
+	params.Add("accessKey", room.accessKey)
 
 	request, err := http.NewRequest(http.MethodGet,
 		fmt.Sprintf(
 			"%s/api/host?%s",
-			signalServer,
+			room.server,
 			params.Encode(),
 		),
 		nil)
@@ -106,12 +134,12 @@ func (room *Room) signalHostGet(signalServer string) (bool, error) {
 
 	room.remoteSessionDescription = hostSignalBody.Description
 	room.remoteCandidates = hostSignalBody.Candidates
-	room.signalAccessKey = hostSignalBody.AccessKey
+	room.accessKey = hostSignalBody.AccessKey
 
 	return false, nil
 }
 
-func (room *Room) signalGuestPost(signalServer string) (bool, error) {
+func (room *SignallingScope) guestPost() (bool, error) {
 
 	client := &http.Client{}
 
@@ -121,10 +149,10 @@ func (room *Room) signalGuestPost(signalServer string) (bool, error) {
 		Candidates  []string `json:"candidates"`
 		AccessKey   string   `json:"accessKey"`
 	}{
-		HostID:      room.signalId,
+		HostID:      room.id,
 		Description: room.localSessionDescription,
 		Candidates:  room.localCandidates,
-		AccessKey:   room.signalAccessKey,
+		AccessKey:   room.accessKey,
 	}
 
 	body, err := json.Marshal(payload)
@@ -134,7 +162,7 @@ func (room *Room) signalGuestPost(signalServer string) (bool, error) {
 
 	request, err := http.NewRequest(http.MethodPost,
 		fmt.Sprintf("%s/api/guest",
-			signalServer),
+			room.server),
 		bytes.NewBuffer(body))
 	if err != nil {
 		return false, err
@@ -155,18 +183,18 @@ func (room *Room) signalGuestPost(signalServer string) (bool, error) {
 	return true, nil
 }
 
-func (room *Room) signalGuestGet(signalServer string) error {
+func (room *SignallingScope) guestGet() error {
 
 	client := &http.Client{}
 
 	params := url.Values{}
-	params.Add("hostId", room.signalId)
-	params.Add("accessKey", room.signalAccessKey)
+	params.Add("hostId", room.id)
+	params.Add("accessKey", room.accessKey)
 
 	request, err := http.NewRequest(http.MethodGet,
 		fmt.Sprintf(
 			"%s/api/guest?%s",
-			signalServer,
+			room.server,
 			params.Encode(),
 		),
 		nil)
@@ -218,4 +246,138 @@ func decode(in string, obj *webrtc.SessionDescription) {
 	if err = json.Unmarshal(b, obj); err != nil {
 		panic(err)
 	}
+}
+
+func (room *SignallingScope) polling(peerConnectionId uint64,
+	meetingType MeetingType,
+	peerConnection *webrtc.PeerConnection) error {
+	if room.complete {
+		return nil
+	}
+
+	if meetingType == MeetingTypeHost {
+		return room.hostPolling(peerConnection)
+	} else {
+		return room.guestPolling(peerConnection)
+	}
+}
+
+func (room *SignallingScope) guestPolling(peerConnection *webrtc.PeerConnection) error {
+	if room.complete {
+		return nil
+	}
+
+	var err error
+	room.complete, err = room.hostGet()
+	if err != nil {
+		room.accessKey = ""
+
+		if room.complete {
+			room.complete = false
+			return nil
+		}
+		return err
+	}
+	room.complete = false
+
+	if len(room.remoteSessionDescription) != 0 {
+		var sessionDescription webrtc.SessionDescription
+		decode(room.remoteSessionDescription, &sessionDescription)
+		err = peerConnection.SetRemoteDescription(sessionDescription)
+		if err != nil {
+			return err
+		}
+
+		room.waitForAllICECandidates = webrtc.GatheringCompletePromise(peerConnection)
+
+		answerSessionDescription, err := peerConnection.CreateAnswer(nil)
+		if err != nil {
+			return err
+		}
+
+		err = peerConnection.SetLocalDescription(answerSessionDescription)
+		if err != nil {
+			return err
+		}
+	} else if len(room.remoteCandidates) != 0 {
+		// for (const candidate of room.remoteCandidates) {
+		//     await peerConnection.addIceCandidate(
+		//         JSON.parse(atob(candidate))
+		//     );
+		// }
+	}
+
+	room.remoteSessionDescription = ""
+	room.remoteCandidates = []string{}
+
+	select {
+	case <-room.waitForAllICECandidates:
+		room.waitForAllICECandidates = nil
+		localDescription := peerConnection.LocalDescription()
+		room.localSessionDescription = encode(localDescription)
+	default:
+	}
+
+	if len(room.localSessionDescription) != 0 || len(room.localCandidates) != 0 {
+		room.complete, err = room.guestPost()
+		// room.signallingComplete becoming true regardless of ICE trickling proper
+		// implementation might lead to no connection
+		if err != nil {
+			return err
+		}
+		room.localSessionDescription = ""
+		room.localCandidates = []string{}
+	}
+
+	return nil
+}
+
+func (room *SignallingScope) hostPolling(peerConnection *webrtc.PeerConnection) error {
+	if room.complete {
+		return nil
+	}
+
+	var err error
+
+	select {
+	case <-room.waitForAllICECandidates:
+		room.waitForAllICECandidates = nil
+		localDescription := peerConnection.LocalDescription()
+		room.localSessionDescription = encode(localDescription)
+	default:
+	}
+
+	if len(room.localSessionDescription) != 0 || len(room.localCandidates) != 0 {
+		err = room.hostPost()
+		if err != nil {
+			room.complete = true
+			return err
+		}
+		room.localSessionDescription = ""
+		room.localCandidates = []string{}
+	}
+
+	err = room.guestGet()
+	if err != nil {
+		room.complete = true
+		return err
+	}
+
+	if len(room.remoteSessionDescription) != 0 {
+		var sessionDescription webrtc.SessionDescription
+		decode(room.remoteSessionDescription, &sessionDescription)
+		peerConnection.SetRemoteDescription(sessionDescription)
+
+		room.complete = true
+	} else if len(room.remoteCandidates) != 0 {
+		// for (const candidate of room.remoteCandidates) {
+		//     await peerConnection.addIceCandidate(
+		//         JSON.parse(atob(candidate))
+		//     );
+		// }
+	}
+	room.remoteSessionDescription = ""
+	room.remoteCandidates = []string{}
+
+	return nil
 }

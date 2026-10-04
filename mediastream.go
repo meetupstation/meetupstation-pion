@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/rtp"
@@ -138,7 +140,12 @@ func (mediaStream *MediaStream) closeLocalStreams() error {
 	return nil
 }
 
-func (mediaStream *MediaStream) sendLocal(room *Room, mediaType MediaType) {
+func (mediaStream *MediaStream) sendLocal(room *Room,
+	mediaType MediaType,
+	waitGroup *sync.WaitGroup,
+	running *atomic.Bool) {
+
+	defer waitGroup.Done()
 
 	listener := func(mediaType MediaType) *net.UDPConn {
 		if mediaType == MediaTypeAudio {
@@ -149,7 +156,7 @@ func (mediaStream *MediaStream) sendLocal(room *Room, mediaType MediaType) {
 	}(mediaType)
 
 	inboundRTPPacket := make([]byte, 1600) // UDP MTU
-	for {
+	for running.Load() {
 		readBytes, _, err := listener.ReadFrom(inboundRTPPacket)
 		if err != nil {
 			fmt.Fprintf(os.Stderr,
@@ -158,7 +165,12 @@ func (mediaStream *MediaStream) sendLocal(room *Room, mediaType MediaType) {
 		}
 
 		// fmt.Println(readBytes)
-		for peerIndex, peer := range room.peers {
+		room.peersMutex.RLock()
+		peers := make(map[uint64]*Peer, len(room.peers))
+		maps.Copy(peers, room.peers)
+		room.peersMutex.RUnlock()
+
+		for peerConnectionId, peer := range peers {
 			track := func() *webrtc.TrackLocalStaticRTP {
 				if mediaType == MediaTypeVideo {
 					return peer.localVideoTrack
@@ -179,7 +191,7 @@ func (mediaStream *MediaStream) sendLocal(room *Room, mediaType MediaType) {
 
 				fmt.Fprintf(os.Stderr,
 					"conn %d: while write to track: %s\n",
-					peerIndex,
+					peerConnectionId,
 					err)
 			}
 		}
@@ -187,10 +199,14 @@ func (mediaStream *MediaStream) sendLocal(room *Room, mediaType MediaType) {
 	}
 }
 
-func (mediaStream *MediaStream) receiveRemote(mediaType MediaType) {
+func (mediaStream *MediaStream) receiveRemote(mediaType MediaType,
+	waitGroup *sync.WaitGroup,
+	running *atomic.Bool) {
+	defer waitGroup.Done()
+
 	buf := make([]byte, 1500)
 	rtpPacket := &rtp.Packet{}
-	for {
+	for running.Load() {
 		track, connection, payloadType :=
 			func(mediaType MediaType) (*webrtc.TrackRemote, *net.UDPConn, uint8) {
 				if mediaType == MediaTypeVideo {

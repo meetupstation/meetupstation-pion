@@ -13,7 +13,6 @@ type Peer struct {
 	localVideoTrack  *webrtc.TrackLocalStaticRTP
 	localAudioTrack  *webrtc.TrackLocalStaticRTP
 	dataChannel      *webrtc.DataChannel
-	room             *Room
 	connectedChannel chan bool
 }
 
@@ -29,7 +28,6 @@ func (peer *Peer) onICEConnectionStateChange(connectionState webrtc.ICEConnectio
 		}
 	}
 	if connectionState == webrtc.ICEConnectionStateFailed ||
-		connectionState == webrtc.ICEConnectionStateDisconnected ||
 		connectionState == webrtc.ICEConnectionStateClosed {
 
 		if peer.peerConnection != nil {
@@ -38,16 +36,15 @@ func (peer *Peer) onICEConnectionStateChange(connectionState webrtc.ICEConnectio
 	}
 }
 
-func (peer *Peer) close() {
+func (peer *Peer) close() error {
+	var err error
+
 	if peer.peerConnection != nil {
-		err := peer.peerConnection.Close()
+		err = peer.peerConnection.Close()
 		peer.peerConnection = nil
 
 		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"conn %d: peerConnection.Close - %s\n",
-				peer.peerConnectionId,
-				err)
+			return err
 		}
 	}
 
@@ -59,10 +56,14 @@ func (peer *Peer) close() {
 		peer.localAudioTrack = nil
 	}
 
-	peer.closeDataChannel()
+	if err != nil {
+		peer.closeDataChannel()
+		return err
+	}
+	return peer.closeDataChannel()
 }
 
-func (peer *Peer) closeDataChannel() {
+func (peer *Peer) closeDataChannel() error {
 	if peer.dataChannel != nil {
 		peer.dataChannel.OnMessage(func(message webrtc.DataChannelMessage) {
 		})
@@ -71,12 +72,11 @@ func (peer *Peer) closeDataChannel() {
 		peer.dataChannel = nil
 
 		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"conn %d: dataChannel.Close - %s\n",
-				peer.peerConnectionId,
-				err)
+			return err
 		}
 	}
+
+	return nil
 }
 
 func (peer *Peer) IsNull() bool {
