@@ -1,12 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"net"
 	"os"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/pion/rtp"
@@ -142,10 +144,7 @@ func (mediaStream *MediaStream) closeLocalStreams() error {
 
 func (mediaStream *MediaStream) sendLocal(room *Room,
 	mediaType MediaType,
-	waitGroup *sync.WaitGroup,
 	running *atomic.Bool) {
-
-	defer waitGroup.Done()
 
 	listener := func(mediaType MediaType) *net.UDPConn {
 		if mediaType == MediaTypeAudio {
@@ -157,11 +156,20 @@ func (mediaStream *MediaStream) sendLocal(room *Room,
 
 	inboundRTPPacket := make([]byte, 1600) // UDP MTU
 	for running.Load() {
+		listener.SetReadDeadline(time.Now().Add(time.Second))
+
 		readBytes, _, err := listener.ReadFrom(inboundRTPPacket)
 		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"listener.ReadFrom: %s\n",
-				err)
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				continue
+			}
+			if errors.Is(err, net.ErrClosed) {
+				fmt.Fprintf(os.Stderr, "listener.ReadFrom: %s\n", err)
+				return
+			}
+			fmt.Fprintf(os.Stderr, "listener.ReadFrom: %s\n", err)
+			time.Sleep(time.Second)
+			continue
 		}
 
 		// fmt.Println(readBytes)
@@ -200,13 +208,18 @@ func (mediaStream *MediaStream) sendLocal(room *Room,
 }
 
 func (mediaStream *MediaStream) receiveRemote(mediaType MediaType,
-	waitGroup *sync.WaitGroup,
 	running *atomic.Bool) {
-	defer waitGroup.Done()
 
 	buf := make([]byte, 1500)
 	rtpPacket := &rtp.Packet{}
 	for running.Load() {
+		getStringMediaType := func(mediaType MediaType) string {
+			if mediaType == MediaTypeVideo {
+				return "video"
+			} else {
+				return "audio"
+			}
+		}
 		track, connection, payloadType :=
 			func(mediaType MediaType) (*webrtc.TrackRemote, *net.UDPConn, uint8) {
 				if mediaType == MediaTypeVideo {
@@ -221,15 +234,31 @@ func (mediaStream *MediaStream) receiveRemote(mediaType MediaType,
 			}(mediaType)
 
 		if track == nil {
+			// fmt.Fprintf(os.Stderr,
+			// 	"remote stream warning: nil remote track - %s\n",
+			// 	getStringMediaType(mediaType))
 			time.Sleep(time.Second)
 			continue
 		}
 		if connection == nil {
-			break
+			fmt.Fprintf(os.Stderr,
+				"remote stream error: nil remote connection - %s\n",
+				getStringMediaType(mediaType))
+			return
 		}
+
+		track.SetReadDeadline(time.Now().Add(time.Second))
 
 		n, _, err := track.Read(buf)
 		if err != nil {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				// fmt.Fprintf(os.Stderr,
+				// 	"remote stream warning: timeout %s - %s\n",
+				// 	getStringMediaType(mediaType),
+				// 	err)
+				continue
+			}
 			fmt.Fprintf(os.Stderr,
 				"remote stream warning: track read - %s\n",
 				err)
@@ -242,9 +271,9 @@ func (mediaStream *MediaStream) receiveRemote(mediaType MediaType,
 			fmt.Fprintf(os.Stderr,
 				"remote stream warning: rtp packet unmarshal - %s\n",
 				err)
-			time.Sleep(time.Second)
 			continue
 		}
+
 		rtpPacket.PayloadType = payloadType
 
 		n, err = rtpPacket.MarshalTo(buf)
@@ -252,16 +281,17 @@ func (mediaStream *MediaStream) receiveRemote(mediaType MediaType,
 			fmt.Fprintf(os.Stderr,
 				"remote stream warning: rtp packet marshal - %s\n",
 				err)
-			time.Sleep(time.Second)
 			continue
 		}
 
 		_, err = connection.Write(buf[:n])
 		if err != nil {
+			if errors.Is(err, syscall.ECONNREFUSED) {
+				continue
+			}
 			fmt.Fprintf(os.Stderr,
 				"remote stream warning: rtp packet write - %s\n",
 				err)
-			time.Sleep(time.Second)
 			continue
 		}
 	}

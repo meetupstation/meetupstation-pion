@@ -17,6 +17,50 @@ const (
 	MediaTypeVideo MediaType = 1
 )
 
+func checkClosedPeers(room *Room) {
+	closedPeerConnectionIds := func() []uint64 {
+		closedPeerConnectionIds := make([]uint64, 0)
+
+		room.peersMutex.RLock()
+		defer room.peersMutex.RUnlock()
+
+		for peerConnectionId, peer := range room.peers {
+			select {
+			case connected := <-peer.connectedChannel:
+				if !connected {
+					closedPeerConnectionIds = append(closedPeerConnectionIds, peerConnectionId)
+				} else {
+					fmt.Fprintf(os.Stderr, "Error: conn %d: ice connected\n", peerConnectionId)
+				}
+			default:
+			}
+		}
+
+		return closedPeerConnectionIds
+	}()
+
+	for _, peerConnectionId := range closedPeerConnectionIds {
+		if err := room.closePeer(peerConnectionId); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
+		}
+	}
+}
+
+func closeAllPeers(room *Room) {
+	room.peersMutex.RLock()
+	ids := make([]uint64, 0, len(room.peers))
+	for id := range room.peers {
+		ids = append(ids, id)
+	}
+	room.peersMutex.RUnlock()
+
+	for _, peerConnectionId := range ids {
+		if err := room.closePeer(peerConnectionId); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
+		}
+	}
+}
+
 func main() {
 
 	if len(os.Args) != 4 ||
@@ -49,12 +93,10 @@ func main() {
 	signal.Notify(interruptChannel, os.Interrupt, syscall.SIGTERM)
 
 	var waitGroup sync.WaitGroup
-	waitGroup.Add(1)
-	go func() {
+	waitGroup.Go(func() {
 		<-interruptChannel
 		running.Store(false)
-		waitGroup.Done()
-	}()
+	})
 
 	var err error
 	err = mediaStream.initializeLocalStreams(4000, 4002)
@@ -63,10 +105,12 @@ func main() {
 		return
 	}
 
-	waitGroup.Add(1)
-	go mediaStream.sendLocal(&room, MediaTypeAudio, &waitGroup, &running)
-	waitGroup.Add(1)
-	go mediaStream.sendLocal(&room, MediaTypeVideo, &waitGroup, &running)
+	waitGroup.Go(func() {
+		mediaStream.sendLocal(&room, MediaTypeAudio, &running)
+	})
+	waitGroup.Go(func() {
+		mediaStream.sendLocal(&room, MediaTypeVideo, &running)
+	})
 
 	err = mediaStream.initializeRemoteStreams(4004, 4006)
 	if err != nil {
@@ -74,10 +118,12 @@ func main() {
 		return
 	}
 
-	waitGroup.Add(1)
-	go mediaStream.receiveRemote(MediaTypeAudio, &waitGroup, &running)
-	waitGroup.Add(1)
-	go mediaStream.receiveRemote(MediaTypeVideo, &waitGroup, &running)
+	waitGroup.Go(func() {
+		mediaStream.receiveRemote(MediaTypeAudio, &running)
+	})
+	waitGroup.Go(func() {
+		mediaStream.receiveRemote(MediaTypeVideo, &running)
+	})
 
 	for running.Load() {
 		roomSignalling.restart()
@@ -90,6 +136,7 @@ func main() {
 		err = room.initializePeerConnection(peerConnectionId)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
+			time.Sleep(time.Second)
 			continue
 		}
 
@@ -97,9 +144,12 @@ func main() {
 
 		fmt.Fprintf(os.Stdout, "conn %d: setting up tracks and data handlers\n", peerConnectionId)
 
-		err = room.prepareGuestAnswerOrHostOffer(&roomSignalling, &mediaStream, peerConnectionId)
+		room.setupTracksAndDataHandlers(&mediaStream, peerConnectionId)
+
+		err = room.prepareHostOffer(&roomSignalling, peerConnectionId)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
+			room.closePeer(peerConnectionId)
 			time.Sleep(time.Second)
 			continue
 		}
@@ -129,34 +179,10 @@ func main() {
 				fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
 			}
 		case MeetingTypeHost:
-			closedPeerConnectionIds := func() []uint64 {
-				peerConnectionIds := make([]uint64, 0)
-				room.peersMutex.RLock()
-				defer room.peersMutex.RUnlock()
-
-				for peerConnectionId, peer := range room.peers {
-					select {
-					case connected := <-peer.connectedChannel:
-						if !connected {
-							peerConnectionIds = append(peerConnectionIds, peerConnectionId)
-						} else {
-							fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
-						}
-					default:
-					}
-				}
-
-				return peerConnectionIds
-			}()
-
-			for _, peerConnectionId := range closedPeerConnectionIds {
-				if err = room.closePeer(peerConnectionId); err != nil {
-					fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
-				}
-			}
-
+			checkClosedPeers(&room)
 		}
 	}
+	closeAllPeers(&room)
 
 	waitGroup.Wait()
 

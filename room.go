@@ -202,7 +202,7 @@ func (room *Room) setupTracksAndDataHandlers(mediaStream *MediaStream, peerConne
 	peer := room.getPeer(peerConnectionId)
 
 	peer.peerConnection.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		if track.Kind().String() == "video" {
+		if track.Kind() == webrtc.RTPCodecTypeVideo {
 			mediaStream.remoteVideoMutex.Lock()
 			defer mediaStream.remoteVideoMutex.Unlock()
 			mediaStream.remoteVideoTrack = track
@@ -226,12 +226,9 @@ func (room *Room) setupTracksAndDataHandlers(mediaStream *MediaStream, peerConne
 		})
 }
 
-func (room *Room) prepareGuestAnswerOrHostOffer(
+func (room *Room) prepareHostOffer(
 	signalling *SignallingScope,
-	mediaStream *MediaStream,
 	peerConnectionId uint64) error {
-
-	room.setupTracksAndDataHandlers(mediaStream, peerConnectionId)
 
 	peer := room.getPeer(peerConnectionId)
 
@@ -254,8 +251,6 @@ func (room *Room) prepareGuestAnswerOrHostOffer(
 		if err != nil {
 			return err
 		}
-	} else {
-
 	}
 
 	return nil
