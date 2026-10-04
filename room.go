@@ -292,7 +292,7 @@ func (room *Room) waitForIceConnected(peer *Peer,
 	return fmt.Errorf("ice connection time out")
 }
 
-func (room *Room) waitForIceDisconnected(peer *Peer,
+func (room *Room) waitForIceClosed(peer *Peer,
 	signalling *SignallingScope,
 	running *atomic.Bool) error {
 	const stepWait = 50

@@ -116,32 +116,45 @@ func main() {
 			continue
 		}
 
-		waitForDisconnected := func(signalling *SignallingScope, waitGroup *sync.WaitGroup) {
-			if waitGroup != nil {
-				defer waitGroup.Done()
-			}
-			err = room.waitForIceDisconnected(peer, signalling, &running)
+		switch room.meetingType {
+		case MeetingTypeGuest:
+			fmt.Fprintf(os.Stdout,
+				"conn %d: signalling/waiting for ice closing\n",
+				peerConnectionId)
+			err = room.waitForIceClosed(peer, &roomSignalling, &running)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
 			}
 			if err = room.closePeer(peerConnectionId); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
 			}
-		}
-
-		switch room.meetingType {
-		case MeetingTypeGuest:
-			fmt.Fprintf(os.Stdout,
-				"conn %d: signalling/waiting for ice disconnection\n",
-				peerConnectionId)
-			waitForDisconnected(&roomSignalling, nil)
 		case MeetingTypeHost:
-			fmt.Fprintf(os.Stdout,
-				"conn %d: waiting for ice disconnection in a goroutine\n",
-				peerConnectionId)
+			closedPeerConnectionIds := func() []uint64 {
+				peerConnectionIds := make([]uint64, 0)
+				room.peersMutex.RLock()
+				defer room.peersMutex.RUnlock()
 
-			waitGroup.Add(1)
-			go waitForDisconnected(nil, &waitGroup)
+				for peerConnectionId, peer := range room.peers {
+					select {
+					case connected := <-peer.connectedChannel:
+						if !connected {
+							peerConnectionIds = append(peerConnectionIds, peerConnectionId)
+						} else {
+							fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
+						}
+					default:
+					}
+				}
+
+				return peerConnectionIds
+			}()
+
+			for _, peerConnectionId := range closedPeerConnectionIds {
+				if err = room.closePeer(peerConnectionId); err != nil {
+					fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
+				}
+			}
+
 		}
 	}
 
