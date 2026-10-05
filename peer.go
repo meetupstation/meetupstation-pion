@@ -3,57 +3,73 @@ package main
 import (
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/pion/webrtc/v4"
 )
 
 type Peer struct {
-	peerConnection   *webrtc.PeerConnection
-	peerConnectionId uint64
-	localVideoTrack  *webrtc.TrackLocalStaticRTP
-	localAudioTrack  *webrtc.TrackLocalStaticRTP
-	dataChannel      *webrtc.DataChannel
-	connectedChannel chan bool
+	peerConnectionMutex sync.RWMutex
+	peerConnection      *webrtc.PeerConnection
+	connectionId        uint64
+	localVideoTrack     *webrtc.TrackLocalStaticRTP
+	localAudioTrack     *webrtc.TrackLocalStaticRTP
+	dataChannel         *webrtc.DataChannel
+	connectedChannel    chan bool
+}
+
+func (peer *Peer) getConnection() *webrtc.PeerConnection {
+	peer.peerConnectionMutex.RLock()
+	defer peer.peerConnectionMutex.RUnlock()
+	return peer.peerConnection
 }
 
 func (peer *Peer) onICEConnectionStateChange(connectionState webrtc.ICEConnectionState) {
+	peer.peerConnectionMutex.RLock()
+	defer peer.peerConnectionMutex.RUnlock()
+
 	fmt.Fprintf(os.Stderr,
 		"conn %d: state: %s\n",
-		peer.peerConnectionId,
+		peer.connectionId,
 		connectionState.String())
 
+	if peer.peerConnection == nil {
+		return
+	}
+
 	if connectionState == webrtc.ICEConnectionStateConnected {
-		if peer.peerConnection != nil {
-			peer.connectedChannel <- true
-		}
+		peer.connectedChannel <- true
 	}
 	if connectionState == webrtc.ICEConnectionStateFailed ||
 		connectionState == webrtc.ICEConnectionStateClosed {
 
-		if peer.peerConnection != nil {
-			peer.connectedChannel <- false
-		}
+		peer.connectedChannel <- false
 	}
 }
 
 func (peer *Peer) close() error {
+	func() {
+		peer.peerConnectionMutex.RLock()
+		defer peer.peerConnectionMutex.RUnlock()
+
+		run := true
+		for run {
+			select {
+			case <-peer.connectedChannel:
+			default:
+				run = false
+			}
+		}
+	}()
+
+	peer.peerConnectionMutex.Lock()
+	defer peer.peerConnectionMutex.Unlock()
+
 	var err error
 
 	if peer.peerConnection != nil {
 		err = peer.peerConnection.Close()
 		peer.peerConnection = nil
-
-		if err != nil {
-			return err
-		}
-	}
-
-	if peer.localVideoTrack != nil {
-		peer.localVideoTrack = nil
-	}
-
-	if peer.localAudioTrack != nil {
-		peer.localAudioTrack = nil
 	}
 
 	if err != nil {
@@ -79,9 +95,9 @@ func (peer *Peer) closeDataChannel() error {
 	return nil
 }
 
-func (peer *Peer) IsNull() bool {
-	return (peer.peerConnection == nil ||
-		peer.dataChannel == nil ||
-		peer.localAudioTrack == nil ||
-		peer.localVideoTrack == nil)
+func (peer *Peer) IsClosed() bool {
+	peer.peerConnectionMutex.RLock()
+	defer peer.peerConnectionMutex.RUnlock()
+
+	return peer.peerConnection == nil
 }

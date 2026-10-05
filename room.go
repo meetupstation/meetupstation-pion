@@ -51,7 +51,7 @@ func (room *Room) appendPeer(peer *Peer) {
 	room.peersMutex.Lock()
 	defer room.peersMutex.Unlock()
 
-	room.peers[peer.peerConnectionId] = peer
+	room.peers[peer.connectionId] = peer
 }
 
 func (room *Room) getPeer(peerconnectionId uint64) *Peer {
@@ -174,7 +174,7 @@ func (room *Room) initializePeerConnection(peerConnectionId uint64) error {
 
 	peer := Peer{
 		peerConnection:   peerConnection,
-		peerConnectionId: peerConnectionId,
+		connectionId:     peerConnectionId,
 		localVideoTrack:  localVideoTrack,
 		localAudioTrack:  localAudioTrack,
 		dataChannel:      dataChannel,
@@ -239,15 +239,17 @@ func (room *Room) prepareHostOffer(
 			return err
 		}
 
-		signalling.waitForAllICECandidates = webrtc.GatheringCompletePromise(peer.peerConnection)
+		peerConnection := peer.getConnection()
 
-		offerSessionDescription, err := peer.peerConnection.CreateOffer(nil)
+		signalling.waitForAllICECandidates = webrtc.GatheringCompletePromise(peerConnection)
+
+		offerSessionDescription, err := peerConnection.CreateOffer(nil)
 
 		if err != nil {
 			return err
 		}
 
-		err = peer.peerConnection.SetLocalDescription(offerSessionDescription)
+		err = peerConnection.SetLocalDescription(offerSessionDescription)
 		if err != nil {
 			return err
 		}
@@ -259,11 +261,13 @@ func (room *Room) prepareHostOffer(
 func (room *Room) waitForIceConnected(peer *Peer,
 	signalling *SignallingScope,
 	running *atomic.Bool) error {
-	const stepWait = 50
+	const stepWait = 200
 
 	start := time.Now()
 
 	var err error
+
+	peerConnection := peer.getConnection()
 
 	for time.Since(start) < 20*time.Second && running.Load() {
 
@@ -276,7 +280,7 @@ func (room *Room) waitForIceConnected(peer *Peer,
 			}
 		case <-time.After(stepWait * time.Millisecond):
 			if signalling != nil {
-				err = signalling.polling(peer.peerConnectionId, room.meetingType, peer.peerConnection)
+				err = signalling.polling(room.meetingType, peerConnection)
 				if err != nil {
 					return err
 				}
@@ -284,15 +288,20 @@ func (room *Room) waitForIceConnected(peer *Peer,
 		}
 	}
 
-	return fmt.Errorf("ice connection time out")
+	if running.Load() {
+		return fmt.Errorf("ice connection time out")
+	} else {
+		return nil
+	}
 }
 
 func (room *Room) waitForIceClosed(peer *Peer,
 	signalling *SignallingScope,
 	running *atomic.Bool) error {
-	const stepWait = 50
+	const stepWait = 200
 
 	var err error
+	peerConnection := peer.getConnection()
 
 	for running.Load() {
 		select {
@@ -304,7 +313,7 @@ func (room *Room) waitForIceClosed(peer *Peer,
 			}
 		case <-time.After(stepWait * time.Millisecond):
 			if signalling != nil {
-				err = signalling.polling(peer.peerConnectionId, room.meetingType, peer.peerConnection)
+				err = signalling.polling(room.meetingType, peerConnection)
 				if err != nil {
 					return err
 				}

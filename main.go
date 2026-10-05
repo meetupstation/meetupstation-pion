@@ -63,6 +63,8 @@ func closeAllPeers(room *Room) {
 
 func main() {
 
+	const portShift = 0
+
 	if len(os.Args) != 4 ||
 		(os.Args[1] != "host" && os.Args[1] != "guest") {
 		fmt.Fprintf(os.Stdout,
@@ -99,7 +101,7 @@ func main() {
 	})
 
 	var err error
-	err = mediaStream.initializeLocalStreams(4000, 4002)
+	err = mediaStream.initializeLocalStreams(4000+portShift, 4002+portShift)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: initialize local streams: %s\n", err)
 		return
@@ -112,7 +114,7 @@ func main() {
 		mediaStream.sendLocal(&room, MediaTypeVideo, &running)
 	})
 
-	err = mediaStream.initializeRemoteStreams(4004, 4006)
+	err = mediaStream.initializeRemoteStreams(4004+portShift, 4006+portShift)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: initialize remote streams: %s\n", err)
 		return
@@ -132,6 +134,10 @@ func main() {
 		mediaStream.remoteAudioTrack = nil
 
 		peerConnectionId := room.getAndUpdatePeerConnectionId()
+
+		if room.meetingType == MeetingTypeHost {
+			checkClosedPeers(&room)
+		}
 
 		err = room.initializePeerConnection(peerConnectionId)
 		if err != nil {
@@ -166,8 +172,7 @@ func main() {
 			continue
 		}
 
-		switch room.meetingType {
-		case MeetingTypeGuest:
+		if room.meetingType == MeetingTypeGuest {
 			fmt.Fprintf(os.Stdout,
 				"conn %d: signalling/waiting for ice closing\n",
 				peerConnectionId)
@@ -178,13 +183,13 @@ func main() {
 			if err = room.closePeer(peerConnectionId); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
 			}
-		case MeetingTypeHost:
-			checkClosedPeers(&room)
 		}
 	}
 	closeAllPeers(&room)
 
+	fmt.Println("wait till goroutines are done")
 	waitGroup.Wait()
+	fmt.Println("goroutines are done")
 
 	err = mediaStream.closeRemoteStreams()
 	if err != nil {

@@ -187,23 +187,29 @@ func (mediaStream *MediaStream) sendLocal(room *Room,
 				}
 			}()
 
-			if peer.IsNull() {
+			peerConnection := peer.getConnection()
+			if peerConnection == nil {
 				continue
 			}
 
+			state := peerConnection.ICEConnectionState()
+
+			if state != webrtc.ICEConnectionStateConnected &&
+				state != webrtc.ICEConnectionStateCompleted {
+				continue
+			}
+
+			// var writtenBytes int
 			_, err = track.Write(inboundRTPPacket[:readBytes])
 			if err != nil {
-				// if errors.Is(err, io.ErrClosedPipe) {
-				// 	peer.Close(peerIndex)
-				// }
-
 				fmt.Fprintf(os.Stderr,
 					"conn %d: while write to track: %s\n",
 					peerConnectionId,
 					err)
 			}
+
+			// fmt.Println(writtenBytes)
 		}
-		// fmt.Println(writtenBytes)
 	}
 }
 

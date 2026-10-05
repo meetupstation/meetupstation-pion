@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/pion/webrtc/v4"
 )
@@ -15,6 +16,7 @@ type SignallingScope struct {
 	id        string
 	accessKey string
 	server    string
+	client    *http.Client
 
 	complete                 bool
 	localSessionDescription  string
@@ -28,6 +30,7 @@ func (room *SignallingScope) init(server string, roomId string) {
 	room.id = roomId
 	room.accessKey = ""
 	room.server = server
+	room.client = &http.Client{Timeout: 5 * time.Second}
 }
 
 func (room *SignallingScope) restart() {
@@ -40,8 +43,6 @@ func (room *SignallingScope) restart() {
 }
 
 func (room *SignallingScope) hostPost() error {
-
-	client := &http.Client{}
 
 	payload := struct {
 		HostID      string   `json:"id"`
@@ -69,7 +70,7 @@ func (room *SignallingScope) hostPost() error {
 
 	request.Header.Add("Content-type", "application/json; charset=UTF-8")
 
-	hostSignal, err := client.Do(request)
+	hostSignal, err := room.client.Do(request)
 	if err != nil {
 		return err
 	}
@@ -95,8 +96,6 @@ func (room *SignallingScope) hostPost() error {
 
 func (room *SignallingScope) hostGet() (bool, error) {
 
-	client := &http.Client{}
-
 	params := url.Values{}
 	params.Add("id", room.id)
 	params.Add("accessKey", room.accessKey)
@@ -112,7 +111,7 @@ func (room *SignallingScope) hostGet() (bool, error) {
 		return false, err
 	}
 
-	hostSignal, err := client.Do(request)
+	hostSignal, err := room.client.Do(request)
 	if err != nil {
 		return false, err
 	}
@@ -141,8 +140,6 @@ func (room *SignallingScope) hostGet() (bool, error) {
 
 func (room *SignallingScope) guestPost() (bool, error) {
 
-	client := &http.Client{}
-
 	payload := struct {
 		HostID      string   `json:"hostId"`
 		Description string   `json:"description"`
@@ -170,7 +167,7 @@ func (room *SignallingScope) guestPost() (bool, error) {
 
 	request.Header.Add("Content-type", "application/json; charset=UTF-8")
 
-	guestSignal, err := client.Do(request)
+	guestSignal, err := room.client.Do(request)
 	if err != nil {
 		return false, err
 	}
@@ -184,8 +181,6 @@ func (room *SignallingScope) guestPost() (bool, error) {
 }
 
 func (room *SignallingScope) guestGet() error {
-
-	client := &http.Client{}
 
 	params := url.Values{}
 	params.Add("hostId", room.id)
@@ -202,7 +197,7 @@ func (room *SignallingScope) guestGet() error {
 		return err
 	}
 
-	guestSignal, err := client.Do(request)
+	guestSignal, err := room.client.Do(request)
 	if err != nil {
 		return err
 	}
@@ -248,8 +243,7 @@ func decode(in string, obj *webrtc.SessionDescription) {
 	}
 }
 
-func (room *SignallingScope) polling(peerConnectionId uint64,
-	meetingType MeetingType,
+func (room *SignallingScope) polling(meetingType MeetingType,
 	peerConnection *webrtc.PeerConnection) error {
 	if room.complete {
 		return nil
