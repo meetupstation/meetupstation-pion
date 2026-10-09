@@ -26,12 +26,8 @@ func checkClosedPeers(room *Room) {
 
 		for peerConnectionId, peer := range room.peers {
 			select {
-			case connected := <-peer.connectedChannel:
-				if !connected {
-					closedPeerConnectionIds = append(closedPeerConnectionIds, peerConnectionId)
-				} else {
-					fmt.Fprintf(os.Stderr, "Error: conn %d: ice connected\n", peerConnectionId)
-				}
+			case <-peer.closedChannel:
+				closedPeerConnectionIds = append(closedPeerConnectionIds, peerConnectionId)
 			default:
 			}
 		}
@@ -65,16 +61,16 @@ func main() {
 
 	const portShift = 0
 
+	var room Room
+	var roomSignalling SignallingScope
+	var mediaStream MediaStream
+
 	if len(os.Args) != 4 ||
 		(os.Args[1] != "host" && os.Args[1] != "guest") {
 		fmt.Fprintf(os.Stdout,
 			"example usage: ./meetupstation-pion [host,guest] https://meetupstation.com \"secret host room id\"\n")
 		return
 	}
-
-	var room Room
-	var roomSignalling SignallingScope
-	var mediaStream MediaStream
 
 	switch os.Args[1] {
 	case "host":
@@ -121,17 +117,14 @@ func main() {
 	}
 
 	waitGroup.Go(func() {
-		mediaStream.receiveRemote(MediaTypeAudio, &running)
+		mediaStream.receiveRemote(&room, MediaTypeAudio, &running)
 	})
 	waitGroup.Go(func() {
-		mediaStream.receiveRemote(MediaTypeVideo, &running)
+		mediaStream.receiveRemote(&room, MediaTypeVideo, &running)
 	})
 
 	for running.Load() {
 		roomSignalling.restart()
-
-		mediaStream.remoteVideoTrack = nil
-		mediaStream.remoteAudioTrack = nil
 
 		peerConnectionId := room.getAndUpdatePeerConnectionId()
 
@@ -150,7 +143,13 @@ func main() {
 
 		fmt.Fprintf(os.Stdout, "conn %d: setting up tracks and data handlers\n", peerConnectionId)
 
-		room.setupTracksAndDataHandlers(&mediaStream, peerConnectionId)
+		err = room.setupTracksAndDataHandlers(peerConnectionId)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
+			room.closePeer(peerConnectionId)
+			time.Sleep(time.Second)
+			continue
+		}
 
 		err = room.prepareHostOffer(&roomSignalling, peerConnectionId)
 		if err != nil {

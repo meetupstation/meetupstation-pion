@@ -344,7 +344,6 @@ func (room *SignallingScope) hostPolling(peerConnection *webrtc.PeerConnection) 
 	if len(room.localSessionDescription) != 0 || len(room.localCandidates) != 0 {
 		err = room.hostPost()
 		if err != nil {
-			room.complete = true
 			return err
 		}
 		room.localSessionDescription = ""
@@ -353,14 +352,16 @@ func (room *SignallingScope) hostPolling(peerConnection *webrtc.PeerConnection) 
 
 	err = room.guestGet()
 	if err != nil {
-		room.complete = true
 		return err
 	}
 
 	if len(room.remoteSessionDescription) != 0 {
 		var sessionDescription webrtc.SessionDescription
 		decode(room.remoteSessionDescription, &sessionDescription)
-		peerConnection.SetRemoteDescription(sessionDescription)
+		err = peerConnection.SetRemoteDescription(sessionDescription)
+		if err != nil {
+			return err
+		}
 
 		room.complete = true
 	} else if len(room.remoteCandidates) != 0 {

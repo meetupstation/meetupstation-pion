@@ -63,8 +63,6 @@ func (room *Room) getPeer(peerconnectionId uint64) *Peer {
 
 func startPeerConnection() (
 	*webrtc.PeerConnection,
-	*webrtc.TrackLocalStaticRTP,
-	*webrtc.TrackLocalStaticRTP,
 	*webrtc.DataChannel,
 	error) {
 
@@ -76,58 +74,8 @@ func startPeerConnection() (
 		},
 	})
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, err
 	}
-
-	videoTrack, err := webrtc.NewTrackLocalStaticRTP(
-		webrtc.RTPCodecCapability{
-			MimeType: webrtc.MimeTypeH264,
-		},
-		"video",
-		"pion")
-
-	if err != nil {
-		peerConnection.Close()
-		return nil, nil, nil, nil, err
-	}
-
-	rtpSender, err := peerConnection.AddTrack(videoTrack)
-	if err != nil {
-		peerConnection.Close()
-		return nil, nil, nil, nil, err
-	}
-	_ = rtpSender
-
-	audioTrack, err := webrtc.NewTrackLocalStaticRTP(
-		webrtc.RTPCodecCapability{
-			MimeType: webrtc.MimeTypeOpus,
-		},
-		"audio",
-		"pion")
-
-	if err != nil {
-		peerConnection.Close()
-		return nil, nil, nil, nil, err
-	}
-
-	rtpSender, err = peerConnection.AddTrack(audioTrack)
-	if err != nil {
-		peerConnection.Close()
-		return nil, nil, nil, nil, err
-	}
-	_ = rtpSender
-
-	// // Read incoming RTCP packets
-	// // Before these packets are returned they are processed by interceptors. For things
-	// // like NACK this needs to be called.
-	// go func() {
-	// 	rtcpBuf := make([]byte, 1500)
-	// 	for {
-	// 		if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
-	// 			return
-	// 		}
-	// 	}
-	// }()
 
 	dataChannelOrdered := true
 	dataChannelNegotiated := true
@@ -141,7 +89,7 @@ func startPeerConnection() (
 		"meetupstation", &dataChannelInit)
 	if err != nil {
 		peerConnection.Close()
-		return nil, nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	// dataChannel.OnOpen(func() {
@@ -154,8 +102,6 @@ func startPeerConnection() (
 	// })
 
 	return peerConnection,
-		videoTrack,
-		audioTrack,
 		dataChannel,
 		nil
 }
@@ -163,8 +109,6 @@ func startPeerConnection() (
 func (room *Room) initializePeerConnection(peerConnectionId uint64) error {
 
 	peerConnection,
-		localVideoTrack,
-		localAudioTrack,
 		dataChannel,
 		err := startPeerConnection()
 
@@ -175,10 +119,12 @@ func (room *Room) initializePeerConnection(peerConnectionId uint64) error {
 	peer := Peer{
 		peerConnection:   peerConnection,
 		connectionId:     peerConnectionId,
-		localVideoTrack:  localVideoTrack,
-		localAudioTrack:  localAudioTrack,
+		localVideoTrack:  nil,
+		localAudioTrack:  nil,
+		remoteTracks:     make(map[string]*RemoteTrackGroup),
 		dataChannel:      dataChannel,
-		connectedChannel: make(chan bool),
+		connectedChannel: make(chan struct{}),
+		closedChannel:    make(chan struct{}),
 	}
 	room.appendPeer(&peer)
 
@@ -198,20 +144,28 @@ func (room *Room) closePeer(peerConnectionId uint64) error {
 	return err
 }
 
-func (room *Room) setupTracksAndDataHandlers(mediaStream *MediaStream, peerConnectionId uint64) {
+func (room *Room) setupTracksAndDataHandlers(peerConnectionId uint64) error {
 	peer := room.getPeer(peerConnectionId)
 
-	peer.peerConnection.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		if track.Kind() == webrtc.RTPCodecTypeVideo {
-			mediaStream.remoteVideoMutex.Lock()
-			defer mediaStream.remoteVideoMutex.Unlock()
-			mediaStream.remoteVideoTrack = track
-		} else {
-			mediaStream.remoteAudioMutex.Lock()
-			defer mediaStream.remoteAudioMutex.Unlock()
-			mediaStream.remoteAudioTrack = track
+	for range 1 {
+		_, err := peer.peerConnection.AddTransceiverFromKind(
+			webrtc.RTPCodecTypeVideo,
+			webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionSendrecv},
+		)
+		if err != nil {
+			return err
 		}
-	})
+
+		// _, err = peer.peerConnection.AddTransceiverFromKind(
+		// 	webrtc.RTPCodecTypeAudio,
+		// 	webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionSendrecv},
+		// )
+		// if err != nil {
+		// 	return err
+		// }
+	}
+
+	peer.peerConnection.OnTrack(peer.onTrack)
 
 	peer.dataChannel.OnClose(
 		func() {
@@ -224,6 +178,8 @@ func (room *Room) setupTracksAndDataHandlers(mediaStream *MediaStream, peerConne
 				peerConnectionId,
 				string(message.Data))
 		})
+
+	return nil
 }
 
 func (room *Room) prepareHostOffer(
@@ -270,14 +226,11 @@ func (room *Room) waitForIceConnected(peer *Peer,
 	peerConnection := peer.getConnection()
 
 	for time.Since(start) < 20*time.Second && running.Load() {
-
 		select {
-		case connected := <-peer.connectedChannel:
-			if connected {
-				return nil
-			} else {
-				return fmt.Errorf("ice closed")
-			}
+		case <-peer.connectedChannel:
+			return nil
+		case <-peer.closedChannel:
+			return fmt.Errorf("ice closed")
 		case <-time.After(stepWait * time.Millisecond):
 			if signalling != nil {
 				err = signalling.polling(room.meetingType, peerConnection)
@@ -291,7 +244,7 @@ func (room *Room) waitForIceConnected(peer *Peer,
 	if running.Load() {
 		return fmt.Errorf("ice connection time out")
 	} else {
-		return nil
+		return fmt.Errorf("ice connection shutting down")
 	}
 }
 
@@ -305,12 +258,8 @@ func (room *Room) waitForIceClosed(peer *Peer,
 
 	for running.Load() {
 		select {
-		case connected := <-peer.connectedChannel:
-			if !connected {
-				return nil
-			} else {
-				return fmt.Errorf("ice connected")
-			}
+		case <-peer.closedChannel:
+			return nil
 		case <-time.After(stepWait * time.Millisecond):
 			if signalling != nil {
 				err = signalling.polling(room.meetingType, peerConnection)
