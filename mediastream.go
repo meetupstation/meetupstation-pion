@@ -154,11 +154,19 @@ func skipPeer(peer *Peer) bool {
 }
 
 func (mediaStream *MediaStream) sendLocal(room *Room,
-	mediaType MediaType,
+	mediaType webrtc.RTPCodecType,
 	running *atomic.Bool) {
 
-	listener := func(mediaType MediaType) *net.UDPConn {
-		if mediaType == MediaTypeAudio {
+	localTrackIndex := func(mediaType webrtc.RTPCodecType) int {
+		if mediaType == webrtc.RTPCodecTypeAudio {
+			return 4*2 + 1
+		} else {
+			return 4 * 2
+		}
+	}(mediaType)
+
+	listener := func(mediaType webrtc.RTPCodecType) *net.UDPConn {
+		if mediaType == webrtc.RTPCodecTypeAudio {
 			return mediaStream.localAudioListener
 		} else {
 			return mediaStream.localVideoListener
@@ -193,17 +201,10 @@ func (mediaStream *MediaStream) sendLocal(room *Room,
 
 		if eofStream {
 			for /*peerConnectionId*/ _, peer := range peers {
-				if mediaType == MediaTypeVideo {
-					if peer.localVideoTrack != nil {
-						peer.deleteTransceiverTrackLocal(peer.localVideoTrack)
-						peer.localVideoTrack = nil
-					}
-				} else {
-					if peer.localAudioTrack != nil {
-						peer.deleteTransceiverTrackLocal(peer.localAudioTrack)
-						peer.localAudioTrack = nil
-					}
+				if peer.localTracks[localTrackIndex] != nil {
+					peer.localTracks[localTrackIndex] = nil
 				}
+				peer.transceivers[localTrackIndex].Sender().ReplaceTrack(nil)
 			}
 			time.Sleep(time.Second)
 			continue
@@ -216,46 +217,41 @@ func (mediaStream *MediaStream) sendLocal(room *Room,
 			}
 
 			track := func() *webrtc.TrackLocalStaticRTP {
-				if mediaType == MediaTypeVideo {
-					if peer.localVideoTrack == nil {
-						videoTrack, err := webrtc.NewTrackLocalStaticRTP(
+				if peer.localTracks[localTrackIndex] == nil {
+					var localTrack *webrtc.TrackLocalStaticRTP
+					var err error
+					if mediaType == webrtc.RTPCodecTypeVideo {
+						localTrack, err = webrtc.NewTrackLocalStaticRTP(
 							webrtc.RTPCodecCapability{
 								MimeType: webrtc.MimeTypeH264,
 							},
-							"video",
-							"pion")
+							mediaType.String(),
+							fmt.Sprintf("pion-%d", 4))
 
-						if err != nil {
-							return nil
-						}
-
-						peer.localVideoTrack = videoTrack
-					}
-					return peer.localVideoTrack
-				} else {
-					if peer.localAudioTrack == nil {
-						audioTrack, err := webrtc.NewTrackLocalStaticRTP(
+					} else {
+						localTrack, err = webrtc.NewTrackLocalStaticRTP(
 							webrtc.RTPCodecCapability{
 								MimeType: webrtc.MimeTypeOpus,
 							},
-							"audio",
-							"pion")
-
-						if err != nil {
-							return nil
-						}
-						peer.localAudioTrack = audioTrack
+							mediaType.String(),
+							fmt.Sprintf("pion-%d", 4))
 					}
-					return peer.localAudioTrack
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "sendLocal: %v\n", err)
+						return nil
+					}
+					err = peer.transceivers[localTrackIndex].Sender().ReplaceTrack(localTrack)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "sendLocal: %v\n", err)
+						return nil
+					}
+					peer.localTracks[localTrackIndex] = localTrack
 				}
+
+				return peer.localTracks[localTrackIndex]
 			}()
 
 			if track == nil {
-				continue
-			}
-
-			transceiver := peer.setupTransceiverTrackLocal(track)
-			if transceiver == nil {
 				continue
 			}
 
@@ -274,137 +270,104 @@ func (mediaStream *MediaStream) sendLocal(room *Room,
 }
 
 func (mediaStream *MediaStream) receiveRemote(room *Room,
-	mediaType MediaType,
+	mediaType webrtc.RTPCodecType,
 	running *atomic.Bool) {
 
 	buf := make([]byte, 1500)
 	for running.Load() {
 
-		didSomeStreaming := false
 		oneRemoteStreamedLocally := false
 
-		func() {
-			room.peersMutex.RLock()
-			defer room.peersMutex.RUnlock()
+		needsSleep := true
 
-			for /*peerConnectionId*/ _, peer := range room.peers {
-				func() {
-					if skipPeer(peer) {
+		room.remoteStreamMutex.RLock()
+
+		remoteTracks := make([]*webrtc.TrackRemote, len(room.remoteTracks))
+		copy(remoteTracks, room.remoteTracks)
+
+		remoteTrackStreamIds := make([]string, len(room.remoteTrackStreamIds))
+		copy(remoteTrackStreamIds, room.remoteTrackStreamIds)
+
+		room.remoteStreamMutex.RUnlock()
+
+		for trackIndex, remoteTrack := range room.remoteTracks {
+			if remoteTrack == nil {
+				continue
+			}
+			rtpPacket, _, err := remoteTrack.ReadRTP()
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					// setRemoteTrackNil()
+					// setLocalTrackNil()
+				} else {
+					fmt.Fprintf(os.Stderr,
+						"remote stream warning: remote track read - %s\n",
+						err)
+				}
+				continue
+			}
+			needsSleep = false
+
+			room.peersMutex.RLock()
+			peers := make(map[uint64]*Peer, len(room.peers))
+			maps.Copy(peers, room.peers)
+			room.peersMutex.RUnlock()
+
+			for /*peerConnectionId*/ _, peer := range peers {
+
+				if skipPeer(peer) {
+					continue
+				}
+
+				localTrack := peer.localTracks[trackIndex]
+				err = localTrack.WriteRTP(rtpPacket)
+				if err != nil {
+					if errors.Is(err, io.EOF) {
+						// setLocalTrackNil()
+					} else {
+						fmt.Fprintf(os.Stderr,
+							"remote stream warning: local track write - %v\n",
+							err)
+					}
+				}
+			}
+
+			if oneRemoteStreamedLocally == false {
+				oneRemoteStreamedLocally = true
+
+				connection, payloadType :=
+					func(mediaType webrtc.RTPCodecType) (*net.UDPConn, uint8) {
+						if mediaType == webrtc.RTPCodecTypeVideo {
+							return mediaStream.remoteVideoConnection, 96
+						} else {
+							return mediaStream.remoteAudioConnection, 97
+						}
+					}(mediaType)
+
+				rtpPacket.PayloadType = payloadType
+
+				n, err := rtpPacket.MarshalTo(buf)
+				if err != nil {
+					fmt.Fprintf(os.Stderr,
+						"remote stream warning: rtp packet marshal - %s\n",
+						err)
+					return
+				}
+
+				_, err = connection.Write(buf[:n])
+				if err != nil {
+					if errors.Is(err, syscall.ECONNREFUSED) {
 						return
 					}
-
-					peer.remoteTrackMutex.RLock()
-					defer peer.remoteTrackMutex.RUnlock()
-
-					for /*trackId*/ _, remoteTrackGroup := range peer.remoteTracks {
-						connection, payloadType :=
-							func(mediaType MediaType) (*net.UDPConn, uint8) {
-								if mediaType == MediaTypeVideo {
-									return mediaStream.remoteVideoConnection, 96
-								} else {
-									return mediaStream.remoteAudioConnection, 111
-								}
-							}(mediaType)
-						remoteTrack := func() *webrtc.TrackRemote {
-							if mediaType == MediaTypeVideo {
-								return remoteTrackGroup.remoteVideoTrack
-							} else {
-								return remoteTrackGroup.remoteAudioTrack
-							}
-						}()
-						setRemoteTrackNil := func() {
-							if mediaType == MediaTypeVideo {
-								remoteTrackGroup.remoteVideoTrack = nil
-							} else {
-								remoteTrackGroup.remoteAudioTrack = nil
-							}
-						}
-						/*localTrack*/ _ = func() *webrtc.TrackLocalStaticRTP {
-							if mediaType == MediaTypeVideo {
-								return remoteTrackGroup.localVideoTrack
-							} else {
-								return remoteTrackGroup.localAudioTrack
-							}
-						}()
-						setLocalTrackNil := func() {
-							if mediaType == MediaTypeVideo {
-								remoteTrackGroup.localVideoTrack = nil
-							} else {
-								remoteTrackGroup.localAudioTrack = nil
-							}
-						}
-
-						if remoteTrack == nil {
-							return
-						}
-
-						rtpPacket, _, err := remoteTrack.ReadRTP()
-						if err != nil {
-							if errors.Is(err, io.EOF) {
-								setRemoteTrackNil()
-								setLocalTrackNil()
-							} else {
-								fmt.Fprintf(os.Stderr,
-									"remote stream warning: remote track read - %s\n",
-									err)
-							}
-							return
-						}
-
-						// if localTrack == nil {
-						// 	return
-						// }
-
-						// // transceiver := peer.findTransceiver(localTrack)
-						// // if transceiver == nil {
-						// // 	return
-						// // }
-
-						// err = localTrack.WriteRTP(rtpPacket)
-						// if err != nil {
-						// 	if errors.Is(err, io.EOF) {
-						// 		setLocalTrackNil()
-						// 	} else {
-						// 		fmt.Fprintf(os.Stderr,
-						// 			"remote stream warning: local track write - %s\n",
-						// 			err)
-						// 	}
-						// 	return
-						// }
-
-						if oneRemoteStreamedLocally == false {
-							oneRemoteStreamedLocally = true
-
-							rtpPacket.PayloadType = payloadType
-
-							n, err := rtpPacket.MarshalTo(buf)
-							if err != nil {
-								fmt.Fprintf(os.Stderr,
-									"remote stream warning: rtp packet marshal - %s\n",
-									err)
-								return
-							}
-
-							_, err = connection.Write(buf[:n])
-							if err != nil {
-								if errors.Is(err, syscall.ECONNREFUSED) {
-									return
-								}
-								fmt.Fprintf(os.Stderr,
-									"remote stream warning: rtp packet write - %s\n",
-									err)
-								return
-							}
-						}
-
-						didSomeStreaming = true
-					}
-				}()
+					fmt.Fprintf(os.Stderr,
+						"remote stream warning: rtp packet write - %s\n",
+						err)
+					return
+				}
 			}
-		}()
-
-		if didSomeStreaming == false {
-			// time.Sleep(time.Second)
+		}
+		if needsSleep {
+			time.Sleep(time.Second)
 		}
 	}
 

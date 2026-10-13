@@ -1,0 +1,17 @@
+# screen capture
+
+the below two create a direct screen-capture-playback loop
+
+ffmpeg -f x11grab -video_size 1920x1080 -framerate 25 -i $DISPLAY -threads 4 -c:v libx264 -an -preset ultrafast -tune zerolatency -f rtp rtp://127.0.0.1:4006?pkt_size=1200 -f alsa -ac 2 -sample_rate 48000 -thread_queue_size 1024 -i default -preset ultrafast -vn -c:a libopus -f rtp rtp://127.0.0.1:4004?pkt_size=1200
+
+ffplay -protocol_whitelist rtp,udp,file -i /home/tigran/files/prog.projects/meetupstation-pion/remote.sdp
+
+instead use this capture (only the ports changed 4006 -> 4002, 4004 -> 4000), to have the loop go through WebRTC
+
+ffmpeg -f x11grab -video_size 1920x1080 -framerate 25 -i $DISPLAY -threads 4 -c:v libx264 -an -preset ultrafast -tune zerolatency -f rtp rtp://127.0.0.1:40062?pkt_size=1200 -f alsa -ac 2 -sample_rate 48000 -thread_queue_size 1024 -i default -preset ultrafast -vn -c:a libopus -f rtp rtp://127.0.0.1:4000?pkt_size=1200
+
+# webcam
+
+then for webcam-playback loop
+
+ffmpeg -f v4l2 -i /dev/video0 -input_format mjpeg -threads 4 -c:v libx264 -an -preset ultrafast -tune zerolatency -f rtp rtp://127.0.0.1:4002?pkt_size=1200 -f alsa -ac 2 -sample_rate 48000 -i default -vn -c:a libopus -f rtp rtp://127.0.0.1:4000?pkt_size=1200

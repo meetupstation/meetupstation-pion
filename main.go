@@ -8,13 +8,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
-)
 
-type MediaType int
-
-const (
-	MediaTypeAudio MediaType = 0
-	MediaTypeVideo MediaType = 1
+	"github.com/pion/webrtc/v4"
 )
 
 func checkClosedPeers(room *Room) {
@@ -104,10 +99,10 @@ func main() {
 	}
 
 	waitGroup.Go(func() {
-		mediaStream.sendLocal(&room, MediaTypeAudio, &running)
+		mediaStream.sendLocal(&room, webrtc.RTPCodecTypeAudio, &running)
 	})
 	waitGroup.Go(func() {
-		mediaStream.sendLocal(&room, MediaTypeVideo, &running)
+		mediaStream.sendLocal(&room, webrtc.RTPCodecTypeVideo, &running)
 	})
 
 	err = mediaStream.initializeRemoteStreams(4004+portShift, 4006+portShift)
@@ -117,10 +112,10 @@ func main() {
 	}
 
 	waitGroup.Go(func() {
-		mediaStream.receiveRemote(&room, MediaTypeAudio, &running)
+		mediaStream.receiveRemote(&room, webrtc.RTPCodecTypeAudio, &running)
 	})
 	waitGroup.Go(func() {
-		mediaStream.receiveRemote(&room, MediaTypeVideo, &running)
+		mediaStream.receiveRemote(&room, webrtc.RTPCodecTypeVideo, &running)
 	})
 
 	for running.Load() {
