@@ -469,3 +469,29 @@ func (mediaStream *MediaStream) receiveRemote(room *Room,
 	// 	}
 	// }
 }
+
+func (mediaStream *MediaStream) drainTransceiverSenders(room *Room,
+	running *atomic.Bool) {
+
+	buf := make([]byte, 1500)
+	for running.Load() {
+
+		room.peersMutex.RLock()
+		peers := make(map[uint64]*Peer, len(room.peers))
+		maps.Copy(peers, room.peers)
+		room.peersMutex.RUnlock()
+
+		for /*peerConnectionId*/ _, peer := range peers {
+
+			if skipPeer(peer) {
+				continue
+			}
+
+			for _, transceiver := range peer.transceivers {
+				if _, _, err := transceiver.Sender().Read(buf); err != nil {
+					return // returns when the peer connection closes, so no leak
+				}
+			}
+		}
+	}
+}

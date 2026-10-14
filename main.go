@@ -118,6 +118,10 @@ func main() {
 		mediaStream.receiveRemote(&room, webrtc.RTPCodecTypeVideo, &running)
 	})
 
+	waitGroup.Go(func() {
+		mediaStream.drainTransceiverSenders(&room, &running)
+	})
+
 	for running.Load() {
 		roomSignalling.restart()
 
