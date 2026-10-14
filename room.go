@@ -33,8 +33,8 @@ func (room *Room) init(meetingType MeetingType) {
 	room.peers = make(map[uint64]*Peer)
 	room.meetingType = meetingType
 
-	room.remoteTracks = make([]*webrtc.TrackRemote, 8)
-	room.remoteTrackStreamIds = make([]string, 4)
+	room.remoteTracks = make([]*webrtc.TrackRemote, 2) //8
+	room.remoteTrackStreamIds = make([]string, 1)      //4
 }
 
 func (room *Room) getAndUpdatePeerConnectionId() uint64 {
@@ -151,13 +151,14 @@ func (room *Room) discardRemoteStream(remoteTrack *webrtc.TrackRemote) {
 				peer.localTracks[2*rangeIndex] = nil
 				peer.localTracks[2*rangeIndex+1] = nil
 			}
-			room.peersMutex.Unlock()
 
 			room.remoteTrackStreamIds[rangeIndex] = ""
 			room.remoteTracks[2*rangeIndex] = nil
 			room.remoteTracks[2*rangeIndex+1] = nil
 		}
 	}
+
+	room.peersMutex.Unlock()
 	room.remoteStreamMutex.Unlock()
 }
 
@@ -219,8 +220,8 @@ func (room *Room) initializePeerConnection(peerConnectionId uint64) error {
 	peer := Peer{
 		peerConnection:   peerConnection,
 		connectionId:     peerConnectionId,
-		transceivers:     make([]*webrtc.RTPTransceiver, 10),
-		localTracks:      make([]*webrtc.TrackLocalStaticRTP, 10),
+		transceivers:     make([]*webrtc.RTPTransceiver, 2),      //10
+		localTracks:      make([]*webrtc.TrackLocalStaticRTP, 2), //10
 		dataChannel:      dataChannel,
 		connectedChannel: make(chan struct{}),
 		closedChannel:    make(chan struct{}),

@@ -54,7 +54,7 @@ func closeAllPeers(room *Room) {
 
 func main() {
 
-	const portShift = 0
+	const portShift = 100
 
 	var room Room
 	var roomSignalling SignallingScope
@@ -98,12 +98,12 @@ func main() {
 		return
 	}
 
-	waitGroup.Go(func() {
-		mediaStream.sendLocal(&room, webrtc.RTPCodecTypeAudio, &running)
-	})
-	waitGroup.Go(func() {
-		mediaStream.sendLocal(&room, webrtc.RTPCodecTypeVideo, &running)
-	})
+	// waitGroup.Go(func() {
+	// 	mediaStream.sendLocal(&room, webrtc.RTPCodecTypeAudio, &running)
+	// })
+	// waitGroup.Go(func() {
+	// 	mediaStream.sendLocal(&room, webrtc.RTPCodecTypeVideo, &running)
+	// })
 
 	err = mediaStream.initializeRemoteStreams(4004+portShift, 4006+portShift)
 	if err != nil {
@@ -111,9 +111,9 @@ func main() {
 		return
 	}
 
-	waitGroup.Go(func() {
-		mediaStream.receiveRemote(&room, webrtc.RTPCodecTypeAudio, &running)
-	})
+	// waitGroup.Go(func() {
+	// 	mediaStream.receiveRemote(&room, webrtc.RTPCodecTypeAudio, &running)
+	// })
 	waitGroup.Go(func() {
 		mediaStream.receiveRemote(&room, webrtc.RTPCodecTypeVideo, &running)
 	})

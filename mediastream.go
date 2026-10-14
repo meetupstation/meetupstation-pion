@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/pion/webrtc/v4"
@@ -273,10 +272,10 @@ func (mediaStream *MediaStream) receiveRemote(room *Room,
 	mediaType webrtc.RTPCodecType,
 	running *atomic.Bool) {
 
-	buf := make([]byte, 1500)
+	// buf := make([]byte, 1500)
 	for running.Load() {
 
-		oneRemoteStreamedLocally := false
+		// oneRemoteStreamedLocally := false
 
 		needsSleep := true
 
@@ -290,10 +289,13 @@ func (mediaStream *MediaStream) receiveRemote(room *Room,
 
 		room.remoteStreamMutex.RUnlock()
 
-		for trackIndex, remoteTrack := range room.remoteTracks {
-			if remoteTrack == nil {
+		for trackIndex, remoteTrack := range remoteTracks {
+			if remoteTrack == nil || remoteTrack.Kind() != mediaType {
 				continue
 			}
+
+			remoteTrack.SetReadDeadline(time.Now().Add(time.Second))
+
 			rtpPacket, _, err := remoteTrack.ReadRTP()
 			if err != nil {
 				if errors.Is(err, io.EOF) {
@@ -307,6 +309,7 @@ func (mediaStream *MediaStream) receiveRemote(room *Room,
 				continue
 			}
 			needsSleep = false
+			// fmt.Println("read")
 
 			room.peersMutex.RLock()
 			peers := make(map[uint64]*Peer, len(room.peers))
@@ -319,6 +322,17 @@ func (mediaStream *MediaStream) receiveRemote(room *Room,
 					continue
 				}
 
+				// payloadType :=
+				// 	func(mediaType webrtc.RTPCodecType) uint8 {
+				// 		if mediaType == webrtc.RTPCodecTypeVideo {
+				// 			return 96
+				// 		} else {
+				// 			return 97
+				// 		}
+				// 	}(mediaType)
+
+				// rtpPacket.PayloadType = payloadType
+
 				localTrack := peer.localTracks[trackIndex]
 				err = localTrack.WriteRTP(rtpPacket)
 				if err != nil {
@@ -330,43 +344,45 @@ func (mediaStream *MediaStream) receiveRemote(room *Room,
 							err)
 					}
 				}
+				// fmt.Println("written")
 			}
 
-			if oneRemoteStreamedLocally == false {
-				oneRemoteStreamedLocally = true
+			// if oneRemoteStreamedLocally == false {
+			// 	oneRemoteStreamedLocally = true
 
-				connection, payloadType :=
-					func(mediaType webrtc.RTPCodecType) (*net.UDPConn, uint8) {
-						if mediaType == webrtc.RTPCodecTypeVideo {
-							return mediaStream.remoteVideoConnection, 96
-						} else {
-							return mediaStream.remoteAudioConnection, 97
-						}
-					}(mediaType)
+			// 	connection, payloadType :=
+			// 		func(mediaType webrtc.RTPCodecType) (*net.UDPConn, uint8) {
+			// 			if mediaType == webrtc.RTPCodecTypeVideo {
+			// 				return mediaStream.remoteVideoConnection, 96
+			// 			} else {
+			// 				return mediaStream.remoteAudioConnection, 97
+			// 			}
+			// 		}(mediaType)
 
-				rtpPacket.PayloadType = payloadType
+			// 	rtpPacket.PayloadType = payloadType
 
-				n, err := rtpPacket.MarshalTo(buf)
-				if err != nil {
-					fmt.Fprintf(os.Stderr,
-						"remote stream warning: rtp packet marshal - %s\n",
-						err)
-					return
-				}
+			// 	n, err := rtpPacket.MarshalTo(buf)
+			// 	if err != nil {
+			// 		fmt.Fprintf(os.Stderr,
+			// 			"remote stream warning: rtp packet marshal - %s\n",
+			// 			err)
+			// 		continue
+			// 	}
 
-				_, err = connection.Write(buf[:n])
-				if err != nil {
-					if errors.Is(err, syscall.ECONNREFUSED) {
-						return
-					}
-					fmt.Fprintf(os.Stderr,
-						"remote stream warning: rtp packet write - %s\n",
-						err)
-					return
-				}
-			}
+			// 	_, err = connection.Write(buf[:n])
+			// 	if err != nil {
+			// 		if errors.Is(err, syscall.ECONNREFUSED) {
+			// 			continue
+			// 		}
+			// 		fmt.Fprintf(os.Stderr,
+			// 			"remote stream warning: rtp packet write - %s\n",
+			// 			err)
+			// 		continue
+			// 	}
+			// }
 		}
 		if needsSleep {
+			fmt.Println("sleeping")
 			time.Sleep(time.Second)
 		}
 	}
