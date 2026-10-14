@@ -107,6 +107,10 @@ func (room *Room) tryRemoteStream(remoteTrack *webrtc.TrackRemote) error {
 	}
 
 	for _, peer := range room.peers {
+		if skipPeer(peer) {
+			continue
+		}
+
 		localTrack, err := webrtc.NewTrackLocalStaticRTP(
 			remoteTrack.Codec().RTPCodecCapability,
 			remoteTrack.Kind().String(),

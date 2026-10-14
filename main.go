@@ -111,9 +111,9 @@ func main() {
 		return
 	}
 
-	// waitGroup.Go(func() {
-	// 	mediaStream.receiveRemote(&room, webrtc.RTPCodecTypeAudio, &running)
-	// })
+	waitGroup.Go(func() {
+		mediaStream.receiveRemote(&room, webrtc.RTPCodecTypeAudio, &running)
+	})
 	waitGroup.Go(func() {
 		mediaStream.receiveRemote(&room, webrtc.RTPCodecTypeVideo, &running)
 	})
