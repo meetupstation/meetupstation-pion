@@ -299,8 +299,7 @@ func (mediaStream *MediaStream) receiveRemote(room *Room,
 			rtpPacket, _, err := remoteTrack.ReadRTP()
 			if err != nil {
 				if errors.Is(err, io.EOF) {
-					// setRemoteTrackNil()
-					// setLocalTrackNil()
+					room.RemoveRemoteStream(remoteTrack)
 				} else {
 					fmt.Fprintf(os.Stderr,
 						"remote stream warning: remote track read - %s\n",
@@ -382,7 +381,7 @@ func (mediaStream *MediaStream) receiveRemote(room *Room,
 			// }
 		}
 		if needsSleep {
-			fmt.Println("sleeping")
+			// fmt.Println("sleeping")
 			time.Sleep(time.Second)
 		}
 	}
@@ -481,17 +480,23 @@ func (mediaStream *MediaStream) drainTransceiverSenders(room *Room,
 		maps.Copy(peers, room.peers)
 		room.peersMutex.RUnlock()
 
-		for /*peerConnectionId*/ _, peer := range peers {
+		needsSleep := true
 
+		for /*peerConnectionId*/ _, peer := range peers {
 			if skipPeer(peer) {
 				continue
 			}
 
+			needsSleep = false
 			for _, transceiver := range peer.transceivers {
 				if _, _, err := transceiver.Sender().Read(buf); err != nil {
-					return // returns when the peer connection closes, so no leak
+					// return // returns when the peer connection closes, so no leak
 				}
 			}
+		}
+
+		if needsSleep {
+			time.Sleep(time.Second)
 		}
 	}
 }

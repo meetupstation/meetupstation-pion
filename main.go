@@ -32,7 +32,10 @@ func checkClosedPeers(room *Room) {
 
 	for _, peerConnectionId := range closedPeerConnectionIds {
 		if err := room.closePeer(peerConnectionId); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
+			fmt.Fprintf(os.Stderr,
+				"Error: conn %d: %v\n",
+				peerConnectionId,
+				err)
 		}
 	}
 }
@@ -47,7 +50,9 @@ func closeAllPeers(room *Room) {
 
 	for _, peerConnectionId := range ids {
 		if err := room.closePeer(peerConnectionId); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
+			fmt.Fprintf(os.Stderr,
+				"Error: conn %d: %v\n",
+				peerConnectionId, err)
 		}
 	}
 }
@@ -94,7 +99,9 @@ func main() {
 	var err error
 	err = mediaStream.initializeLocalStreams(4000+portShift, 4002+portShift)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: initialize local streams: %s\n", err)
+		fmt.Fprintf(os.Stderr,
+			"Error: initialize local streams: %v\n",
+			err)
 		return
 	}
 
@@ -107,7 +114,9 @@ func main() {
 
 	err = mediaStream.initializeRemoteStreams(4004+portShift, 4006+portShift)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: initialize remote streams: %s\n", err)
+		fmt.Fprintf(os.Stderr,
+			"Error: initialize remote streams: %v\n",
+			err)
 		return
 	}
 
@@ -133,18 +142,26 @@ func main() {
 
 		err = room.initializePeerConnection(peerConnectionId)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
+			fmt.Fprintf(os.Stderr,
+				"Error: conn %d: %v\n",
+				peerConnectionId,
+				err)
 			time.Sleep(time.Second)
 			continue
 		}
 
 		peer := room.getPeer(peerConnectionId)
 
-		fmt.Fprintf(os.Stdout, "conn %d: setting up tracks and data handlers\n", peerConnectionId)
+		fmt.Fprintf(os.Stdout,
+			"conn %d: setting up tracks and data handlers\n",
+			peerConnectionId)
 
 		err = room.setupTracksAndDataHandlers(peerConnectionId)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
+			fmt.Fprintf(os.Stderr,
+				"Error: conn %d: %v\n",
+				peerConnectionId,
+				err)
 			room.closePeer(peerConnectionId)
 			time.Sleep(time.Second)
 			continue
@@ -152,19 +169,30 @@ func main() {
 
 		err = room.prepareHostOffer(&roomSignalling, peerConnectionId)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
+			fmt.Fprintf(os.Stderr,
+				"Error: conn %d: %v\n",
+				peerConnectionId,
+				err)
 			room.closePeer(peerConnectionId)
 			time.Sleep(time.Second)
 			continue
 		}
 
-		fmt.Fprintf(os.Stdout, "conn %d: signalling/waiting for ice connection\n", peerConnectionId)
+		fmt.Fprintf(os.Stdout,
+			"conn %d: signalling/waiting for ice connection\n",
+			peerConnectionId)
 
 		err = room.waitForIceConnected(peer, &roomSignalling, &running)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
+			fmt.Fprintf(os.Stderr,
+				"Error: conn %d: %v\n",
+				peerConnectionId,
+				err)
 			if err = room.closePeer(peerConnectionId); err != nil {
-				fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
+				fmt.Fprintf(os.Stderr,
+					"Error: conn %d: %v\n",
+					peerConnectionId,
+					err)
 			}
 			time.Sleep(time.Second)
 			continue
@@ -176,10 +204,16 @@ func main() {
 				peerConnectionId)
 			err = room.waitForIceClosed(peer, &roomSignalling, &running)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
+				fmt.Fprintf(os.Stderr,
+					"Error: conn %d: %v\n",
+					peerConnectionId,
+					err)
 			}
 			if err = room.closePeer(peerConnectionId); err != nil {
-				fmt.Fprintf(os.Stderr, "Error: conn %d: %s\n", peerConnectionId, err)
+				fmt.Fprintf(os.Stderr,
+					"Error: conn %d: %v\n",
+					peerConnectionId,
+					err)
 			}
 		}
 	}
@@ -191,10 +225,14 @@ func main() {
 
 	err = mediaStream.closeRemoteStreams()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: close remote streams: %s\n", err)
+		fmt.Fprintf(os.Stderr,
+			"Error: close remote streams: %v\n",
+			err)
 	}
 	err = mediaStream.closeLocalStreams()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: close local streams: %s\n", err)
+		fmt.Fprintf(os.Stderr,
+			"Error: close local streams: %v\n",
+			err)
 	}
 }

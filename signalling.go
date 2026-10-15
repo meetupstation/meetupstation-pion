@@ -314,8 +314,8 @@ func (room *SignallingScope) guestPolling(peerConnection *webrtc.PeerConnection)
 
 	if len(room.localSessionDescription) != 0 || len(room.localCandidates) != 0 {
 		room.complete, err = room.guestPost()
-		// room.signallingComplete becoming true regardless of ICE trickling proper
-		// implementation might lead to no connection
+		// room.signallingComplete becoming true regardless of
+		// ICE trickling proper implementation might lead to no connection
 		if err != nil {
 			return err
 		}

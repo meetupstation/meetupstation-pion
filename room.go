@@ -117,7 +117,7 @@ func (room *Room) tryRemoteStream(remoteTrack *webrtc.TrackRemote) error {
 			fmt.Sprintf("pion-%d", rangeIndex),
 		)
 		if err != nil {
-			return fmt.Errorf("conn %d - failed to create local track: %v\n",
+			return fmt.Errorf("conn %d - creating the local track: %v\n",
 				peer.connectionId,
 				err)
 		}
@@ -126,7 +126,7 @@ func (room *Room) tryRemoteStream(remoteTrack *webrtc.TrackRemote) error {
 
 		err = peer.transceivers[trackIndex].Sender().ReplaceTrack(localTrack)
 		if err != nil {
-			return fmt.Errorf("conn %d - failed to replace the local track: %v\n",
+			return fmt.Errorf("conn %d - replacing the local track: %v\n",
 				peer.connectionId,
 				err)
 		}
@@ -164,6 +164,37 @@ func (room *Room) discardRemoteStream(remoteTrack *webrtc.TrackRemote) {
 
 	room.peersMutex.Unlock()
 	room.remoteStreamMutex.Unlock()
+}
+
+func (room *Room) RemoveRemoteStream(remoteTrack *webrtc.TrackRemote) {
+	streamId := remoteTrack.StreamID() //track.Msid()
+
+	room.remoteStreamMutex.Lock()
+	defer room.remoteStreamMutex.Unlock()
+
+	room.peersMutex.Lock()
+	defer room.peersMutex.Unlock()
+
+	for rangeIndex, value := range room.remoteTrackStreamIds {
+		if value == streamId {
+
+			for _, peer := range room.peers {
+				if skipPeer(peer) {
+					continue
+				}
+
+				trackIndex := rangeIndex2TrackIndex(remoteTrack.Kind(), rangeIndex)
+
+				peer.transceivers[trackIndex].Sender().ReplaceTrack(nil)
+				peer.localTracks[trackIndex] = nil
+			}
+
+			room.remoteTrackStreamIds[rangeIndex] = ""
+			room.remoteTracks[rangeIndex2TrackIndex(remoteTrack.Kind(), rangeIndex)] = nil
+		}
+
+		break
+	}
 }
 
 func startPeerConnection() (
@@ -374,7 +405,19 @@ func (room *Room) waitForIceConnected(peer *Peer,
 			return fmt.Errorf("ice closed")
 		case <-time.After(stepWait * time.Millisecond):
 			if signalling != nil {
+				signallingComplete := signalling.complete
+				waitForAllICECandidates := signalling.waitForAllICECandidates
 				err = signalling.polling(room.meetingType, peerConnection)
+				if true == signalling.complete && false == signallingComplete {
+					fmt.Fprintf(os.Stdout,
+						"conn %d: signalling: complete\n",
+						peer.connectionId)
+				}
+				if nil != waitForAllICECandidates && nil == signalling.waitForAllICECandidates {
+					fmt.Fprintf(os.Stdout,
+						"conn %d: waiting: ice candidates gathering complete\n",
+						peer.connectionId)
+				}
 				if err != nil {
 					return err
 				}
@@ -403,7 +446,19 @@ func (room *Room) waitForIceClosed(peer *Peer,
 			return nil
 		case <-time.After(stepWait * time.Millisecond):
 			if signalling != nil {
+				signallingComplete := signalling.complete
+				waitForAllICECandidates := signalling.waitForAllICECandidates
 				err = signalling.polling(room.meetingType, peerConnection)
+				if true == signalling.complete && false == signallingComplete {
+					fmt.Fprintf(os.Stdout,
+						"conn %d: signalling: complete\n",
+						peer.connectionId)
+				}
+				if nil != waitForAllICECandidates && nil == signalling.waitForAllICECandidates {
+					fmt.Fprintf(os.Stdout,
+						"conn %d: waiting: ice candidates gathering complete\n",
+						peer.connectionId)
+				}
 				if err != nil {
 					return err
 				}

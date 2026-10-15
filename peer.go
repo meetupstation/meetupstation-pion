@@ -53,12 +53,19 @@ func (peer *Peer) onICEConnectionStateChange(connectionState webrtc.ICEConnectio
 
 func (peer *Peer) onTrack(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 	fmt.Fprintf(os.Stdout,
-		"received remote track: ID=%s, Kind=%s, StreamID=%s, Msid=%s\n", track.ID(), track.Kind().String(), track.StreamID(), track.Msid())
+		"conn %d: ontrack: ID=%s, Kind=%s, StreamID=%s, Msid=%s\n",
+		peer.connectionId,
+		track.ID(),
+		track.Kind().String(),
+		track.StreamID(),
+		track.Msid())
 
 	err := peer.room.tryRemoteStream(track)
 	if err != nil {
-		fmt.Fprintf(os.Stdout,
-			"%v\n", err)
+		fmt.Fprintf(os.Stderr,
+			"Error: conn %d: ontrack: %v\n",
+			peer.connectionId,
+			err)
 		peer.room.discardRemoteStream(track)
 	} else {
 		peer.room.commitRemoteStream()
