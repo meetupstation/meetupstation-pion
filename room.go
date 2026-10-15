@@ -77,7 +77,8 @@ func rangeIndex2TrackIndex(mediaType webrtc.RTPCodecType, rangeIndex int) int {
 	}
 }
 
-func (room *Room) tryRemoteStream(remoteTrack *webrtc.TrackRemote) error {
+func (room *Room) tryRemoteStream(remoteTrack *webrtc.TrackRemote,
+	peerConnectionId uint64) error {
 	streamId := remoteTrack.StreamID() //track.Msid()
 
 	room.remoteStreamMutex.Lock()
@@ -111,6 +112,12 @@ func (room *Room) tryRemoteStream(remoteTrack *webrtc.TrackRemote) error {
 			continue
 		}
 
+		trackIndex := rangeIndex2TrackIndex(remoteTrack.Kind(), rangeIndex)
+		// if peer.connectionId == peerConnectionId {
+		// 	peer.transceivers[trackIndex].Sender().ReplaceTrack(nil)
+		// 	peer.localTracks[trackIndex] = nil
+		// 	continue
+		// }
 		localTrack, err := webrtc.NewTrackLocalStaticRTP(
 			remoteTrack.Codec().RTPCodecCapability,
 			remoteTrack.Kind().String(),
@@ -121,8 +128,6 @@ func (room *Room) tryRemoteStream(remoteTrack *webrtc.TrackRemote) error {
 				peer.connectionId,
 				err)
 		}
-
-		trackIndex := rangeIndex2TrackIndex(remoteTrack.Kind(), rangeIndex)
 
 		err = peer.transceivers[trackIndex].Sender().ReplaceTrack(localTrack)
 		if err != nil {

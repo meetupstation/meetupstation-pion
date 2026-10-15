@@ -60,7 +60,7 @@ func (peer *Peer) onTrack(track *webrtc.TrackRemote, receiver *webrtc.RTPReceive
 		track.StreamID(),
 		track.Msid())
 
-	err := peer.room.tryRemoteStream(track)
+	err := peer.room.tryRemoteStream(track, peer.connectionId)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"Error: conn %d: ontrack: %v\n",

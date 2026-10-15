@@ -333,6 +333,9 @@ func (mediaStream *MediaStream) receiveRemote(room *Room,
 				// rtpPacket.PayloadType = payloadType
 
 				localTrack := peer.localTracks[trackIndex]
+				if localTrack == nil {
+					continue
+				}
 				err = localTrack.WriteRTP(rtpPacket)
 				if err != nil {
 					if errors.Is(err, io.EOF) {
