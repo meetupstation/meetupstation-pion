@@ -301,9 +301,11 @@ func (mediaStream *MediaStream) receiveRemote(room *Room,
 				if errors.Is(err, io.EOF) {
 					room.RemoveRemoteStream(remoteTrack)
 				} else {
-					fmt.Fprintf(os.Stderr,
-						"remote stream warning: remote track read - %s\n",
-						err)
+					// this is happening when, the phone power button is pressed
+					// the video stream stops, while audio continues
+					// fmt.Fprintf(os.Stderr,
+					// 	"remote stream warning: remote track read - %s\n",
+					// 	err)
 				}
 				continue
 			}
