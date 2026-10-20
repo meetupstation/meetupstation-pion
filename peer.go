@@ -9,30 +9,22 @@ import (
 )
 
 type Peer struct {
-	peerConnectionMutex sync.RWMutex
-	peerConnection      *webrtc.PeerConnection
-	connectionId        uint64
-	transceivers        []*webrtc.RTPTransceiver
-	localTracks         []*webrtc.TrackLocalStaticRTP
-	dataChannel         *webrtc.DataChannel
-	connectedChannel    chan struct{}
-	closedChannel       chan struct{}
-	connectedOnce       sync.Once
-	closedOnce          sync.Once
+	peerConnection   *webrtc.PeerConnection
+	connectionId     uint64
+	dataChannel      *webrtc.DataChannel
+	connectedChannel chan struct{}
+	closedChannel    chan struct{}
+	connectedOnce    sync.Once
+	closedOnce       sync.Once
 
-	room *Room
+	streamer *Streamer
 }
 
 func (peer *Peer) getConnection() *webrtc.PeerConnection {
-	peer.peerConnectionMutex.RLock()
-	defer peer.peerConnectionMutex.RUnlock()
 	return peer.peerConnection
 }
 
 func (peer *Peer) onICEConnectionStateChange(connectionState webrtc.ICEConnectionState) {
-	peer.peerConnectionMutex.RLock()
-	defer peer.peerConnectionMutex.RUnlock()
-
 	fmt.Fprintf(os.Stdout,
 		"conn %d: state: %s\n",
 		peer.connectionId,
@@ -51,31 +43,28 @@ func (peer *Peer) onICEConnectionStateChange(connectionState webrtc.ICEConnectio
 	}
 }
 
-func (peer *Peer) onTrack(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+func (peer *Peer) onRemoteTrack(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 	fmt.Fprintf(os.Stdout,
-		"conn %d: ontrack: ID=%s, Kind=%s, StreamID=%s, Msid=%s\n",
+		"conn %d: onRemoteTrack: ID=%s, Kind=%s, StreamID=%s, Msid=%s\n",
 		peer.connectionId,
 		track.ID(),
 		track.Kind().String(),
 		track.StreamID(),
 		track.Msid())
 
-	err := peer.room.tryRemoteStream(track, peer.connectionId)
+	err := peer.streamer.tryRemoteStream(track)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
-			"Error: conn %d: ontrack: %v\n",
+			"Error: conn %d: onRemoteTrack: %v\n",
 			peer.connectionId,
 			err)
-		peer.room.discardRemoteStream(track)
+		peer.streamer.discardRemoteStream(track)
 	} else {
-		peer.room.commitRemoteStream()
+		peer.streamer.commitRemoteStream()
 	}
 }
 
 func (peer *Peer) close() error {
-	peer.peerConnectionMutex.Lock()
-	defer peer.peerConnectionMutex.Unlock()
-
 	var err error
 
 	if peer.peerConnection != nil {
@@ -107,8 +96,21 @@ func (peer *Peer) closeDataChannel() error {
 }
 
 func (peer *Peer) IsClosed() bool {
-	peer.peerConnectionMutex.RLock()
-	defer peer.peerConnectionMutex.RUnlock()
-
 	return peer.peerConnection == nil
+}
+
+func (peer *Peer) isReady() bool {
+	peerConnection := peer.getConnection()
+	if peerConnection == nil {
+		return false
+	}
+
+	state := peerConnection.ICEConnectionState()
+
+	if state != webrtc.ICEConnectionStateConnected &&
+		state != webrtc.ICEConnectionStateCompleted {
+		return false
+	}
+
+	return true
 }
