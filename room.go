@@ -182,7 +182,8 @@ func (room *Room) closePeer(peerConnectionId uint64,
 
 func (room *Room) setupTracksAndDataHandlers(
 	peerConnectionId uint64,
-	streamer *Streamer) error {
+	streamer *Streamer,
+	roomSignalling *SignallingScope) error {
 
 	peer := room.getPeer(peerConnectionId)
 
@@ -278,6 +279,8 @@ func (room *Room) setupTracksAndDataHandlers(
 
 	peer.peerConnection.OnTrack(peer.onRemoteTrack)
 
+	peer.peerConnection.OnICECandidate(roomSignalling.OnICECandidate)
+
 	peer.dataChannel.OnClose(
 		func() {
 		})
@@ -293,7 +296,7 @@ func (room *Room) setupTracksAndDataHandlers(
 	return nil
 }
 
-func (room *Room) prepareHostOffer(
+func (room *Room) ifHostPrepareOffer(
 	signalling *SignallingScope,
 	peerConnectionId uint64) error {
 
@@ -301,14 +304,12 @@ func (room *Room) prepareHostOffer(
 
 	var err error
 	if room.meetingType == MeetingTypeHost {
-		err = signalling.hostPost()
+		err = signalling.hostPost("", []string{})
 		if err != nil {
 			return err
 		}
 
 		peerConnection := peer.getConnection()
-
-		signalling.waitForAllICECandidates = webrtc.GatheringCompletePromise(peerConnection)
 
 		offerSessionDescription, err := peerConnection.CreateOffer(nil)
 
@@ -345,20 +346,14 @@ func (room *Room) waitForIceConnected(peer *Peer,
 		case <-time.After(stepWait * time.Millisecond):
 			if signalling != nil {
 				signallingComplete := signalling.complete
-				waitForAllICECandidates := signalling.waitForAllICECandidates
 				err = signalling.polling(room.meetingType, peerConnection)
+				if err != nil {
+					return err
+				}
 				if true == signalling.complete && false == signallingComplete {
 					fmt.Fprintf(os.Stdout,
 						"conn %d: signalling: complete\n",
 						peer.connectionId)
-				}
-				if nil != waitForAllICECandidates && nil == signalling.waitForAllICECandidates {
-					fmt.Fprintf(os.Stdout,
-						"conn %d: waiting: ice candidates gathering complete\n",
-						peer.connectionId)
-				}
-				if err != nil {
-					return err
 				}
 			}
 		}
@@ -386,20 +381,14 @@ func (room *Room) waitForIceClosed(peer *Peer,
 		case <-time.After(stepWait * time.Millisecond):
 			if signalling != nil {
 				signallingComplete := signalling.complete
-				waitForAllICECandidates := signalling.waitForAllICECandidates
 				err = signalling.polling(room.meetingType, peerConnection)
+				if err != nil {
+					return err
+				}
 				if true == signalling.complete && false == signallingComplete {
 					fmt.Fprintf(os.Stdout,
 						"conn %d: signalling: complete\n",
 						peer.connectionId)
-				}
-				if nil != waitForAllICECandidates && nil == signalling.waitForAllICECandidates {
-					fmt.Fprintf(os.Stdout,
-						"conn %d: waiting: ice candidates gathering complete\n",
-						peer.connectionId)
-				}
-				if err != nil {
-					return err
 				}
 			}
 		}

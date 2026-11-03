@@ -44,8 +44,8 @@ func closeAllPeers(room *Room, streamer *Streamer) {
 
 func main() {
 
-	const mirrorStreams = 0
-	const peerStreams = 2
+	const mirrorStreams = 4
+	const peerStreams = 10
 	const portShift = 100
 
 	var room Room
@@ -143,6 +143,8 @@ func main() {
 
 		if room.meetingType == MeetingTypeHost {
 			checkClosedPeers(&room, &streamer)
+		} else {
+			roomSignalling.accessKey = ""
 		}
 
 		err = room.initializePeerConnection(peerConnectionId, &streamer)
@@ -161,7 +163,7 @@ func main() {
 			"conn %d: setting up tracks and data handlers\n",
 			peerConnectionId)
 
-		err = room.setupTracksAndDataHandlers(peerConnectionId, &streamer)
+		err = room.setupTracksAndDataHandlers(peerConnectionId, &streamer, &roomSignalling)
 		if err != nil {
 			fmt.Fprintf(os.Stderr,
 				"Error: conn %d: %v\n",
@@ -177,7 +179,7 @@ func main() {
 			continue
 		}
 
-		err = room.prepareHostOffer(&roomSignalling, peerConnectionId)
+		err = room.ifHostPrepareOffer(&roomSignalling, peerConnectionId)
 		if err != nil {
 			fmt.Fprintf(os.Stderr,
 				"Error: conn %d: %v\n",
