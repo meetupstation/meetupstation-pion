@@ -188,19 +188,12 @@ func (room *Room) setupTracksAndDataHandlers(
 	peer := room.getPeer(peerConnectionId)
 
 	rtpCodecTypes := []webrtc.RTPCodecType{
-		webrtc.RTPCodecTypeAudio,
 		webrtc.RTPCodecTypeVideo,
+		webrtc.RTPCodecTypeAudio,
 	}
 	mimeTypeStrings := []string{
-		webrtc.MimeTypeOpus,
 		webrtc.MimeTypeH264,
-	}
-	transceiverIndex := func(mediaType webrtc.RTPCodecType) int {
-		if mediaType == webrtc.RTPCodecTypeVideo {
-			return 0
-		} else {
-			return 1
-		}
+		webrtc.MimeTypeOpus,
 	}
 
 	for mirrorStreamIndex := range len(streamer.inbound) {
@@ -211,6 +204,30 @@ func (room *Room) setupTracksAndDataHandlers(
 		outbound := &streamer.inbound[mirrorStreamIndex].outboundArray.outbound[peerStreamIndex]
 
 		for index := range 2 {
+			rtpCodecCapability := webrtc.RTPCodecCapability{
+				MimeType: mimeTypeStrings[index],
+			}
+			keepLocalTrack := false
+
+			for peerStreamIndex := range streamer.inbound[mirrorStreamIndex].outboundArray.outbound {
+				if streamer.inbound[mirrorStreamIndex].outboundArray.outbound[peerStreamIndex].peerConnectionId == 0 {
+					continue
+				}
+
+				transceiver := streamer.inbound[mirrorStreamIndex].outboundArray.outbound[peerStreamIndex].transceivers[index]
+
+				if transceiver == nil {
+					continue
+				}
+
+				localTrack := streamer.inbound[mirrorStreamIndex].outboundArray.outbound[peerStreamIndex].localTracks[index]
+				if localTrack != nil {
+					rtpCodecCapability = localTrack.Codec()
+					keepLocalTrack = true
+					break
+				}
+			}
+
 			transceiver, err := peer.peerConnection.AddTransceiverFromKind(
 				rtpCodecTypes[index],
 				webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionSendrecv},
@@ -220,9 +237,7 @@ func (room *Room) setupTracksAndDataHandlers(
 			}
 
 			track, err := webrtc.NewTrackLocalStaticRTP(
-				webrtc.RTPCodecCapability{
-					MimeType: mimeTypeStrings[index],
-				},
+				rtpCodecCapability,
 				rtpCodecTypes[index].String(),
 				fmt.Sprintf("pion-%d", mirrorStreamIndex))
 
@@ -235,8 +250,12 @@ func (room *Room) setupTracksAndDataHandlers(
 				return err
 			}
 
-			outbound.transceivers[transceiverIndex(rtpCodecTypes[index])] = transceiver
-			outbound.localTracks[transceiverIndex(rtpCodecTypes[index])] = nil
+			outbound.transceivers[index] = transceiver
+			if keepLocalTrack {
+				outbound.localTracks[index] = track
+			} else {
+				outbound.localTracks[index] = nil
+			}
 		}
 	}
 
@@ -272,8 +291,8 @@ func (room *Room) setupTracksAndDataHandlers(
 				return err
 			}
 
-			outbound.transceivers[transceiverIndex(rtpCodecTypes[index])] = transceiver
-			outbound.localTracks[transceiverIndex(rtpCodecTypes[index])] = nil
+			outbound.transceivers[index] = transceiver
+			outbound.localTracks[index] = nil
 		}
 	}
 
