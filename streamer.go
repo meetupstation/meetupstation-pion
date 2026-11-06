@@ -250,7 +250,7 @@ func (streamer *Streamer) sendLocal(
 		readBytes, _, err := streamer.listenStream.listeners[trackIndex].ReadFrom(inboundRTPPacket)
 		if err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) {
-				streamer.discardLocalStream(mediaType)
+				streamer.undoLocalStream(mediaType)
 				continue
 			} else if errors.Is(err, net.ErrClosed) {
 				// I don't close the listener in the code
@@ -280,16 +280,14 @@ func (streamer *Streamer) sendLocal(
 			peerConnectionId := streamer.listenStream.outboundArray.outbound[peerStreamIndex].peerConnectionId
 
 			if streamer.listenStream.outboundArray.outbound[peerStreamIndex].localTracks[trackIndex] == nil {
-				err := streamer.tryLocalStream(mediaType)
+				err := streamer.setLocalStream(mediaType)
 				if err != nil {
-					streamer.discardLocalStream(mediaType)
+					streamer.undoLocalStream(mediaType)
 					fmt.Fprintf(os.Stderr, "conn %d: sendLocal %d, %s: %v\n",
 						peerConnectionId,
 						peerStreamIndex,
 						mediaType.String(),
 						err)
-				} else {
-					streamer.commitLocalStream()
 				}
 			}
 
@@ -341,7 +339,7 @@ func (streamer *Streamer) receiveRemote(mirrorStreamIndex int,
 		rtpPacket, _, err := remoteTrack.ReadRTP()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				streamer.discardRemoteStream(remoteTrack)
+				streamer.undoRemoteTrack(remoteTrack)
 			} else {
 				// this is happening when, the phone power button is pressed
 				// the video stream stops, while audio continues
@@ -547,7 +545,26 @@ func (streamer *Streamer) setupTracksAndDataHandlersMirroring(
 	return nil
 }
 
-func (streamer *Streamer) tryRemoteStream(remoteTrack *webrtc.TrackRemote) error {
+func (streamer *Streamer) closePeerMirroring(peerConnectionId uint64) {
+	for mirrorStreamIndex := range len(streamer.inbound) {
+		peerStreamIndex := streamer.inbound[mirrorStreamIndex].outboundArray.findRO(peerConnectionId)
+		if peerStreamIndex != -1 {
+			outbound := &streamer.inbound[mirrorStreamIndex].outboundArray.outbound[peerStreamIndex]
+			outbound.peerConnectionId = 0
+
+			for index := range 2 {
+				transceiver := outbound.transceivers[index]
+				if transceiver != nil {
+					transceiver.Sender().ReplaceTrack(nil)
+				}
+				outbound.transceivers[index] = nil
+				outbound.localTracks[index] = nil
+			}
+		}
+	}
+}
+
+func (streamer *Streamer) onRemoteTrack(remoteTrack *webrtc.TrackRemote) error {
 	streamId := remoteTrack.StreamID() //track.Msid()
 
 	trackIndex := func(mediaType webrtc.RTPCodecType) int {
@@ -601,10 +618,7 @@ func (streamer *Streamer) tryRemoteStream(remoteTrack *webrtc.TrackRemote) error
 	return nil
 }
 
-func (streamer *Streamer) commitRemoteStream() {
-}
-
-func (streamer *Streamer) discardRemoteStream(remoteTrack *webrtc.TrackRemote) {
+func (streamer *Streamer) undoRemoteTrack(remoteTrack *webrtc.TrackRemote) {
 	trackIndexMap := map[webrtc.RTPCodecType]int{
 		webrtc.RTPCodecTypeVideo: 0,
 		webrtc.RTPCodecTypeAudio: 1,
@@ -700,7 +714,24 @@ func (streamer *Streamer) setupTracksAndDataHandlersLocalStream(
 	return nil
 }
 
-func (streamer *Streamer) tryLocalStream(mediaType webrtc.RTPCodecType) error {
+func (streamer *Streamer) closePeerLocalStream(peerConnectionId uint64) {
+	peerStreamIndex := streamer.listenStream.outboundArray.findRO(peerConnectionId)
+	if peerStreamIndex != -1 {
+		outbound := &streamer.listenStream.outboundArray.outbound[peerStreamIndex]
+		outbound.peerConnectionId = 0
+
+		for index := range 2 {
+			transceiver := outbound.transceivers[index]
+			if transceiver != nil {
+				transceiver.Sender().ReplaceTrack(nil)
+			}
+			outbound.transceivers[index] = nil
+			outbound.localTracks[index] = nil
+		}
+	}
+}
+
+func (streamer *Streamer) setLocalStream(mediaType webrtc.RTPCodecType) error {
 
 	var err error = nil
 
@@ -744,10 +775,7 @@ func (streamer *Streamer) tryLocalStream(mediaType webrtc.RTPCodecType) error {
 	return err
 }
 
-func (streamer *Streamer) commitLocalStream() {
-}
-
-func (streamer *Streamer) discardLocalStream(mediaType webrtc.RTPCodecType) {
+func (streamer *Streamer) undoLocalStream(mediaType webrtc.RTPCodecType) {
 	trackIndex := func(mediaType webrtc.RTPCodecType) int {
 		if mediaType == webrtc.RTPCodecTypeAudio {
 			return 1

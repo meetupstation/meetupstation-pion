@@ -52,15 +52,13 @@ func (peer *Peer) onRemoteTrack(track *webrtc.TrackRemote, receiver *webrtc.RTPR
 		track.StreamID(),
 		track.Msid())
 
-	err := peer.streamer.tryRemoteStream(track)
+	err := peer.streamer.onRemoteTrack(track)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"Error: conn %d: onRemoteTrack: %v\n",
 			peer.connectionId,
 			err)
-		peer.streamer.discardRemoteStream(track)
-	} else {
-		peer.streamer.commitRemoteStream()
+		peer.streamer.undoRemoteTrack(track)
 	}
 }
 

@@ -129,50 +129,8 @@ func (room *Room) closePeer(peerConnectionId uint64,
 	streamer *Streamer) error {
 	peer := room.getPeer(peerConnectionId)
 
-	rtpCodecTypes := []webrtc.RTPCodecType{
-		webrtc.RTPCodecTypeAudio,
-		webrtc.RTPCodecTypeVideo,
-	}
-	transceiverIndex := func(mediaType webrtc.RTPCodecType) int {
-		if mediaType == webrtc.RTPCodecTypeVideo {
-			return 0
-		} else {
-			return 1
-		}
-	}
-
-	for mirrorStreamIndex := range len(streamer.inbound) {
-		peerStreamIndex := streamer.inbound[mirrorStreamIndex].outboundArray.findRO(peerConnectionId)
-		if peerStreamIndex != -1 {
-			outbound := &streamer.inbound[mirrorStreamIndex].outboundArray.outbound[peerStreamIndex]
-			outbound.peerConnectionId = 0
-
-			for index := range 2 {
-				transceiver := outbound.transceivers[transceiverIndex(rtpCodecTypes[index])]
-				if transceiver != nil {
-					transceiver.Sender().ReplaceTrack(nil)
-				}
-				outbound.transceivers[transceiverIndex(rtpCodecTypes[index])] = nil
-				outbound.localTracks[transceiverIndex(rtpCodecTypes[index])] = nil
-			}
-		}
-	}
-	{
-		peerStreamIndex := streamer.listenStream.outboundArray.findRO(peerConnectionId)
-		if peerStreamIndex != -1 {
-			outbound := &streamer.listenStream.outboundArray.outbound[peerStreamIndex]
-			outbound.peerConnectionId = 0
-
-			for index := range 2 {
-				transceiver := outbound.transceivers[transceiverIndex(rtpCodecTypes[index])]
-				if transceiver != nil {
-					transceiver.Sender().ReplaceTrack(nil)
-				}
-				outbound.transceivers[transceiverIndex(rtpCodecTypes[index])] = nil
-				outbound.localTracks[transceiverIndex(rtpCodecTypes[index])] = nil
-			}
-		}
-	}
+	streamer.closePeerMirroring(peerConnectionId)
+	streamer.closePeerLocalStream(peerConnectionId)
 	err := peer.close()
 
 	delete(room.peers, peerConnectionId)
