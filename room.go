@@ -187,113 +187,14 @@ func (room *Room) setupTracksAndDataHandlers(
 
 	peer := room.getPeer(peerConnectionId)
 
-	rtpCodecTypes := []webrtc.RTPCodecType{
-		webrtc.RTPCodecTypeVideo,
-		webrtc.RTPCodecTypeAudio,
-	}
-	mimeTypeStrings := []string{
-		webrtc.MimeTypeH264,
-		webrtc.MimeTypeOpus,
+	err := streamer.setupTracksAndDataHandlersMirroring(peerConnectionId, peer)
+	if err != nil {
+		return err
 	}
 
-	for mirrorStreamIndex := range len(streamer.inbound) {
-		peerStreamIndex := streamer.inbound[mirrorStreamIndex].outboundArray.find(peerConnectionId)
-		if peerStreamIndex == -1 {
-			return fmt.Errorf("all peer streams for mirroring are occupied")
-		}
-		outbound := &streamer.inbound[mirrorStreamIndex].outboundArray.outbound[peerStreamIndex]
-
-		for index := range 2 {
-			rtpCodecCapability := webrtc.RTPCodecCapability{
-				MimeType: mimeTypeStrings[index],
-			}
-			keepLocalTrack := false
-
-			for peerStreamIndex := range streamer.inbound[mirrorStreamIndex].outboundArray.outbound {
-				if streamer.inbound[mirrorStreamIndex].outboundArray.outbound[peerStreamIndex].peerConnectionId == 0 {
-					continue
-				}
-
-				transceiver := streamer.inbound[mirrorStreamIndex].outboundArray.outbound[peerStreamIndex].transceivers[index]
-
-				if transceiver == nil {
-					continue
-				}
-
-				localTrack := streamer.inbound[mirrorStreamIndex].outboundArray.outbound[peerStreamIndex].localTracks[index]
-				if localTrack != nil {
-					rtpCodecCapability = localTrack.Codec()
-					keepLocalTrack = true
-					break
-				}
-			}
-
-			transceiver, err := peer.peerConnection.AddTransceiverFromKind(
-				rtpCodecTypes[index],
-				webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionSendrecv},
-			)
-			if err != nil {
-				return err
-			}
-
-			track, err := webrtc.NewTrackLocalStaticRTP(
-				rtpCodecCapability,
-				rtpCodecTypes[index].String(),
-				fmt.Sprintf("pion-%d", mirrorStreamIndex))
-
-			if err != nil {
-				return err
-			}
-
-			err = transceiver.Sender().ReplaceTrack(track)
-			if err != nil {
-				return err
-			}
-
-			outbound.transceivers[index] = transceiver
-			if keepLocalTrack {
-				outbound.localTracks[index] = track
-			} else {
-				outbound.localTracks[index] = nil
-			}
-		}
-	}
-
-	{
-		peerStreamIndex := streamer.listenStream.outboundArray.find(peerConnectionId)
-		if peerStreamIndex == -1 {
-			return fmt.Errorf("all peer streams for local sharing are occupied")
-		}
-		outbound := &streamer.listenStream.outboundArray.outbound[peerStreamIndex]
-
-		for index := range 2 {
-			transceiver, err := peer.peerConnection.AddTransceiverFromKind(
-				rtpCodecTypes[index],
-				webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionSendrecv},
-			)
-			if err != nil {
-				return err
-			}
-
-			track, err := webrtc.NewTrackLocalStaticRTP(
-				webrtc.RTPCodecCapability{
-					MimeType: mimeTypeStrings[index],
-				},
-				rtpCodecTypes[index].String(),
-				"pion-local")
-
-			if err != nil {
-				return err
-			}
-
-			err = transceiver.Sender().ReplaceTrack(track)
-			if err != nil {
-				return err
-			}
-
-			outbound.transceivers[index] = transceiver
-			outbound.localTracks[index] = nil
-		}
+	err = streamer.setupTracksAndDataHandlersLocalStream(peerConnectionId, peer)
+	if err != nil {
+		return err
 	}
 
 	peer.peerConnection.OnTrack(peer.onRemoteTrack)
