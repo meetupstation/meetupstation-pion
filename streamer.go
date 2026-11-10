@@ -9,8 +9,33 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 )
+
+type rtpRebaser struct {
+	initialized          bool
+	SSRC                 uint32
+	SequenceNumberOffset uint16
+	SequenceNumber       uint16
+}
+
+func (rebaser *rtpRebaser) process(packet *rtp.Packet) {
+	if !rebaser.initialized {
+		rebaser.SSRC = packet.SSRC
+		rebaser.SequenceNumber = packet.SequenceNumber - 1
+		rebaser.SequenceNumberOffset = 0
+		rebaser.initialized = true
+	}
+
+	if rebaser.SSRC != packet.SSRC {
+		rebaser.SequenceNumberOffset = rebaser.SequenceNumber + 1 - packet.SequenceNumber
+		rebaser.SSRC = packet.SSRC
+	}
+
+	packet.SequenceNumber += rebaser.SequenceNumberOffset
+	rebaser.SequenceNumber = packet.SequenceNumber
+}
 
 type Outbound struct {
 	peerConnectionId uint64
@@ -367,35 +392,31 @@ func (streamer *Streamer) sendLocal(
 	mediaType webrtc.RTPCodecType,
 	running *atomic.Bool) {
 
-	trackIndex := func(mediaType webrtc.RTPCodecType) int {
-		if mediaType == webrtc.RTPCodecTypeAudio {
-			return 1
-		} else {
-			return 0
-		}
-	}(mediaType)
+	trackIndexMap := map[webrtc.RTPCodecType]int{
+		webrtc.RTPCodecTypeVideo: 0,
+		webrtc.RTPCodecTypeAudio: 1,
+	}
+	trackIndex := trackIndexMap[mediaType]
 
-	restartStreams := false
+	rebaser := rtpRebaser{initialized: false}
+	var packet rtp.Packet
+	buffer := make([]byte, 1600) // UDP MTU
 
-	inboundRTPPacket := make([]byte, 1600) // UDP MTU
 	for running.Load() {
 
 		streamer.listenStream.listeners[trackIndex].SetReadDeadline(time.Now().Add(time.Second))
 
-		readBytes, _, err := streamer.listenStream.listeners[trackIndex].ReadFrom(inboundRTPPacket)
+		readBytes, _, err := streamer.listenStream.listeners[trackIndex].ReadFrom(buffer)
 		if err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) {
-				if restartStreams == false {
-					// streamer.undoLocalStream(mediaType)
-					// restartStreams = true
-				}
 				continue
 			} else if errors.Is(err, net.ErrClosed) {
 				// I don't close the listener in the code
 				// Not before this goroutine is done
 				return
 			} else {
-				fmt.Fprintf(os.Stderr, "sendLocal %s: listener.ReadFrom: %s\n",
+				fmt.Fprintf(os.Stderr,
+					"sendLocal %s: listener.ReadFrom: %s\n",
 					mediaType.String(),
 					err)
 				time.Sleep(time.Second)
@@ -404,14 +425,11 @@ func (streamer *Streamer) sendLocal(
 		}
 		// fmt.Println(readBytes)
 
-		if restartStreams {
-			err := streamer.setLocalStream(mediaType)
-			if err != nil {
-				streamer.undoLocalStream(mediaType)
-			} else {
-				restartStreams = false
-			}
+		if err = packet.Unmarshal(buffer[:readBytes]); err != nil {
+			time.Sleep(time.Second)
+			continue
 		}
+		rebaser.process(&packet)
 
 		for peerStreamIndex := range streamer.listenStream.outboundArray.outbound {
 			// range over local tracks with different peers
@@ -432,18 +450,19 @@ func (streamer *Streamer) sendLocal(
 				continue
 			}
 
-			// var writtenBytes int
-			_, err = localTrack.Write(inboundRTPPacket[:readBytes])
+			err = localTrack.WriteRTP(&packet)
 			if err != nil {
-				fmt.Fprintf(os.Stderr,
-					"conn %d: sendLocal %d, %s: while writing to track: %v\n",
-					peerConnectionId,
-					peerStreamIndex,
-					mediaType.String(),
-					err)
+				if errors.Is(err, io.EOF) {
+					// debug and figure what to do
+				} else {
+					fmt.Fprintf(os.Stderr,
+						"conn %d: sendLocal %d, %s: while writing to track: %v\n",
+						peerConnectionId,
+						peerStreamIndex,
+						mediaType.String(),
+						err)
+				}
 			}
-
-			// fmt.Println(writtenBytes)
 		}
 	}
 }
@@ -498,11 +517,10 @@ func (streamer *Streamer) receiveRemote(mirrorStreamIndex int,
 
 			peerConnectionId := streamer.inbound[mirrorStreamIndex].outboundArray.outbound[peerStreamIndex].peerConnectionId
 
-			// why not unify this writertp and sendlocal write?
 			err = localTrack.WriteRTP(rtpPacket)
 			if err != nil {
 				if errors.Is(err, io.EOF) {
-					// setLocalTrackNil()
+					// debug and figure what to do
 				} else {
 					fmt.Fprintf(os.Stderr,
 						"conn %d: receiveRemote %d, %s: while writing to track: %v\n",
