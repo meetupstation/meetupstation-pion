@@ -125,12 +125,9 @@ func (room *Room) initializePeerConnection(
 	return nil
 }
 
-func (room *Room) closePeer(peerConnectionId uint64,
-	streamer *Streamer) error {
+func (room *Room) closePeer(peerConnectionId uint64) error {
 	peer := room.getPeer(peerConnectionId)
 
-	streamer.closePeerMirroring(peerConnectionId)
-	streamer.closePeerLocalStream(peerConnectionId)
 	err := peer.close()
 
 	delete(room.peers, peerConnectionId)
@@ -145,12 +142,14 @@ func (room *Room) setupTracksAndDataHandlers(
 
 	peer := room.getPeer(peerConnectionId)
 
-	err := streamer.setupTracksAndDataHandlersMirroring(peerConnectionId, peer)
-	if err != nil {
-		return err
+	for echoStreamIndex := range len(streamer.echoStreams) {
+		err := streamer.echoStreams[echoStreamIndex].outboundTracks.setStreamOnPeer(peer)
+		if err != nil {
+			return err
+		}
 	}
 
-	err = streamer.setupTracksAndDataHandlersLocalStream(peerConnectionId, peer)
+	err := streamer.ownStream.outboundTracks.setStreamOnPeer(peer)
 	if err != nil {
 		return err
 	}

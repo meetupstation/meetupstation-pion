@@ -12,11 +12,11 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-func checkClosedPeers(room *Room, streamer *Streamer) {
+func checkClosedPeers(room *Room) {
 	for peerConnectionId, peer := range room.peers {
 		select {
 		case <-peer.closedChannel:
-			if err := room.closePeer(peerConnectionId, streamer); err != nil {
+			if err := room.closePeer(peerConnectionId); err != nil {
 				fmt.Fprintf(os.Stderr,
 					"Error: conn %d: %v\n",
 					peerConnectionId,
@@ -27,14 +27,14 @@ func checkClosedPeers(room *Room, streamer *Streamer) {
 	}
 }
 
-func closeAllPeers(room *Room, streamer *Streamer) {
+func closeAllPeers(room *Room) {
 	ids := make([]uint64, 0, len(room.peers))
 	for id := range room.peers {
 		ids = append(ids, id)
 	}
 
 	for peerConnectionId := range room.peers {
-		if err := room.closePeer(peerConnectionId, streamer); err != nil {
+		if err := room.closePeer(peerConnectionId); err != nil {
 			fmt.Fprintf(os.Stderr,
 				"Error: conn %d: %v\n",
 				peerConnectionId, err)
@@ -44,8 +44,7 @@ func closeAllPeers(room *Room, streamer *Streamer) {
 
 func main() {
 
-	const mirrorStreams = 4
-	const peerStreams = 10
+	const mirrorStreams = 1
 	const portShift = 100
 
 	var room Room
@@ -85,19 +84,14 @@ func main() {
 
 	var err error
 
-	streamer.init(mirrorStreams, peerStreams)
-	err = streamer.initializeListeners(4000+portShift, 4002+portShift)
+	err = streamer.init(mirrorStreams,
+		4000+portShift,
+		4002+portShift,
+		4004+portShift,
+		4006+portShift)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
-			"Error: initialize local streams: %v\n",
-			err)
-		return
-	}
-
-	err = streamer.initializeRemoteStreams(4004+portShift, 4006+portShift)
-	if err != nil {
-		fmt.Fprintf(os.Stderr,
-			"Error: initialize remote streams: %v\n",
+			"Error: initialize streamer: %v\n",
 			err)
 		return
 	}
@@ -111,30 +105,19 @@ func main() {
 
 	for index := range mirrorStreams {
 		waitGroup.Go(func() {
-			streamer.receiveRemote(index, webrtc.RTPCodecTypeAudio, &running)
+			streamer.echoRemote(index, webrtc.RTPCodecTypeAudio, &running)
 		})
 		waitGroup.Go(func() {
-			streamer.receiveRemote(index, webrtc.RTPCodecTypeVideo, &running)
+			streamer.echoRemote(index, webrtc.RTPCodecTypeVideo, &running)
 		})
 	}
 
-	for peerStreamIndex := range peerStreams {
-		waitGroup.Go(func() {
-			streamer.drainLocalTransceiverSenders(webrtc.RTPCodecTypeVideo, peerStreamIndex, &running)
-		})
-		waitGroup.Go(func() {
-			streamer.drainLocalTransceiverSenders(webrtc.RTPCodecTypeAudio, peerStreamIndex, &running)
-		})
-
-		for mirrorIndex := range mirrorStreams {
-			waitGroup.Go(func() {
-				streamer.drainRemoteTransceiverSenders(webrtc.RTPCodecTypeVideo, mirrorIndex, peerStreamIndex, &running)
-			})
-			waitGroup.Go(func() {
-				streamer.drainRemoteTransceiverSenders(webrtc.RTPCodecTypeAudio, mirrorIndex, peerStreamIndex, &running)
-			})
-		}
-	}
+	waitGroup.Go(func() {
+		streamer.receiveRemote(webrtc.RTPCodecTypeAudio, &running)
+	})
+	waitGroup.Go(func() {
+		streamer.receiveRemote(webrtc.RTPCodecTypeVideo, &running)
+	})
 
 	for running.Load() {
 		roomSignalling.restart()
@@ -142,7 +125,7 @@ func main() {
 		peerConnectionId := room.getAndUpdatePeerConnectionId()
 
 		if room.meetingType == MeetingTypeHost {
-			checkClosedPeers(&room, &streamer)
+			checkClosedPeers(&room)
 		} else {
 			roomSignalling.accessKey = ""
 		}
@@ -169,7 +152,7 @@ func main() {
 				"Error: conn %d: %v\n",
 				peerConnectionId,
 				err)
-			if err = room.closePeer(peerConnectionId, &streamer); err != nil {
+			if err = room.closePeer(peerConnectionId); err != nil {
 				fmt.Fprintf(os.Stderr,
 					"Error: conn %d: %v\n",
 					peerConnectionId,
@@ -185,7 +168,7 @@ func main() {
 				"Error: conn %d: %v\n",
 				peerConnectionId,
 				err)
-			if err = room.closePeer(peerConnectionId, &streamer); err != nil {
+			if err = room.closePeer(peerConnectionId); err != nil {
 				fmt.Fprintf(os.Stderr,
 					"Error: conn %d: %v\n",
 					peerConnectionId,
@@ -205,7 +188,7 @@ func main() {
 				"Error: conn %d: %v\n",
 				peerConnectionId,
 				err)
-			if err = room.closePeer(peerConnectionId, &streamer); err != nil {
+			if err = room.closePeer(peerConnectionId); err != nil {
 				fmt.Fprintf(os.Stderr,
 					"Error: conn %d: %v\n",
 					peerConnectionId,
@@ -226,7 +209,7 @@ func main() {
 					peerConnectionId,
 					err)
 			}
-			if err = room.closePeer(peerConnectionId, &streamer); err != nil {
+			if err = room.closePeer(peerConnectionId); err != nil {
 				fmt.Fprintf(os.Stderr,
 					"Error: conn %d: %v\n",
 					peerConnectionId,
@@ -234,19 +217,19 @@ func main() {
 			}
 		}
 	}
-	closeAllPeers(&room, &streamer)
+	closeAllPeers(&room)
 
 	fmt.Println("wait till goroutines are done")
 	waitGroup.Wait()
 	fmt.Println("goroutines are done")
 
-	err = streamer.closeRemoteStreams()
+	err = streamer.receiveStream.closeRemoteConnections()
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
-			"Error: close remote streams: %v\n",
+			"Error: close remote connections: %v\n",
 			err)
 	}
-	err = streamer.closeListeners()
+	err = streamer.ownStream.closeListeners()
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"Error: close local streams: %v\n",
