@@ -94,11 +94,10 @@ func (outboundArray *OutboundArray) init(
 	return nil
 }
 
-func (outboundArray *OutboundArray) find(peerConnectionId uint64) int {
-	for index := range outboundArray.outbound {
-		if outboundArray.outbound[index].peerConnectionId == peerConnectionId {
-			return index
-		}
+func (outboundArray *OutboundArray) findOrBind(peerConnectionId uint64) int {
+	result := outboundArray.find(peerConnectionId)
+	if result != -1 {
+		return result
 	}
 
 	for index := range outboundArray.outbound {
@@ -111,7 +110,7 @@ func (outboundArray *OutboundArray) find(peerConnectionId uint64) int {
 	return -1
 }
 
-func (outboundArray *OutboundArray) findRO(peerConnectionId uint64) int {
+func (outboundArray *OutboundArray) find(peerConnectionId uint64) int {
 	for index := range outboundArray.outbound {
 		if outboundArray.outbound[index].peerConnectionId == peerConnectionId {
 			return index
@@ -135,14 +134,13 @@ func (outboundArray *OutboundArray) setStreamOnPeer(
 				RTPCodecCapability: webrtc.RTPCodecCapability{
 					MimeType:    webrtc.MimeTypeH264,
 					ClockRate:   90000,
-					SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
-				},
-			},
-			{
-				RTPCodecCapability: webrtc.RTPCodecCapability{
-					MimeType:    webrtc.MimeTypeH264,
-					ClockRate:   90000,
-					SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f",
+					SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e032",
+					RTCPFeedback: []webrtc.RTCPFeedback{
+						{Type: "goog-remb"},
+						{Type: "ccm", Parameter: "fir"},
+						{Type: "nack"},
+						{Type: "nack", Parameter: "pli"},
+					},
 				},
 			},
 		},
@@ -158,7 +156,7 @@ func (outboundArray *OutboundArray) setStreamOnPeer(
 		},
 	}
 
-	peerStreamIndex := outboundArray.find(peerConnectionId)
+	peerStreamIndex := outboundArray.findOrBind(peerConnectionId)
 	if peerStreamIndex == -1 {
 		return fmt.Errorf("all peer streams for local sharing are occupied")
 	}
@@ -190,7 +188,7 @@ func (outboundArray *OutboundArray) setStreamOnPeer(
 }
 
 func (outboundArray *OutboundArray) undoStreamOnPeer(peerConnectionId uint64) {
-	peerStreamIndex := outboundArray.findRO(peerConnectionId)
+	peerStreamIndex := outboundArray.find(peerConnectionId)
 	if peerStreamIndex != -1 {
 		outbound := &outboundArray.outbound[peerStreamIndex]
 		outbound.peerConnectionId = 0
@@ -304,11 +302,10 @@ func (streamer *Streamer) init(mirrorStreams int, peerStreams int) {
 	streamer.remoteConnections = make([]*net.UDPConn, 2)
 }
 
-func (streamer *Streamer) find(streamId string) int {
-	for mirrorStreamIndex := range streamer.inbound {
-		if streamer.inbound[mirrorStreamIndex].remoteStreamId == streamId {
-			return mirrorStreamIndex
-		}
+func (streamer *Streamer) findOrBind(streamId string) int {
+	result := streamer.find(streamId)
+	if result != -1 {
+		return result
 	}
 
 	for mirrorStreamIndex := range streamer.inbound {
@@ -322,7 +319,7 @@ func (streamer *Streamer) find(streamId string) int {
 	return -1
 }
 
-func (streamer *Streamer) findRO(streamId string) int {
+func (streamer *Streamer) find(streamId string) int {
 
 	for mirrorStreamIndex := range streamer.inbound {
 		if streamer.inbound[mirrorStreamIndex].remoteStreamId == streamId {
@@ -680,7 +677,7 @@ func (streamer *Streamer) onRemoteTrack(remoteTrack *webrtc.TrackRemote) error {
 	}
 	trackIndex := trackIndexMap[remoteTrack.Kind()]
 
-	mirrorStreamIndex := streamer.find(streamId)
+	mirrorStreamIndex := streamer.findOrBind(streamId)
 	if -1 == mirrorStreamIndex {
 		return fmt.Errorf("all track mirror streams are used")
 	}
@@ -699,14 +696,14 @@ func (streamer *Streamer) undoRemoteTrack(remoteTrack *webrtc.TrackRemote) {
 
 	streamId := remoteTrack.StreamID() //track.Msid()
 
-	mirrorStreamIndex := streamer.findRO(streamId)
+	mirrorStreamIndex := streamer.find(streamId)
 
 	if mirrorStreamIndex != -1 {
 		// streamer.inbound[mirrorStreamIndex].outboundArray.undoStreamOnTrack(remoteTrack.Kind())
 
-		allClosed := true
 		streamer.inbound[mirrorStreamIndex].remoteTracks[trackIndex] = nil
 
+		allClosed := true
 		for trackIndex := range streamer.inbound[mirrorStreamIndex].remoteTracks {
 			if streamer.inbound[mirrorStreamIndex].remoteTracks[trackIndex] != nil {
 				allClosed = false
