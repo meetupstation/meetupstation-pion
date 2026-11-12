@@ -28,11 +28,6 @@ func checkClosedPeers(room *Room) {
 }
 
 func closeAllPeers(room *Room) {
-	ids := make([]uint64, 0, len(room.peers))
-	for id := range room.peers {
-		ids = append(ids, id)
-	}
-
 	for peerConnectionId := range room.peers {
 		if err := room.closePeer(peerConnectionId); err != nil {
 			fmt.Fprintf(os.Stderr,
@@ -146,7 +141,7 @@ func main() {
 			"conn %d: setting up tracks and data handlers\n",
 			peerConnectionId)
 
-		err = room.setupTracksAndDataHandlers(peerConnectionId, &streamer, &roomSignalling)
+		err = room.setupTracksAndDataHandlers(peerConnectionId, &streamer, &roomSignalling, &waitGroup)
 		if err != nil {
 			fmt.Fprintf(os.Stderr,
 				"Error: conn %d: %v\n",

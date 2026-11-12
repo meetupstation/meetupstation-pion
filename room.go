@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -138,18 +139,19 @@ func (room *Room) closePeer(peerConnectionId uint64) error {
 func (room *Room) setupTracksAndDataHandlers(
 	peerConnectionId uint64,
 	streamer *Streamer,
-	roomSignalling *SignallingScope) error {
+	roomSignalling *SignallingScope,
+	waitGroup *sync.WaitGroup) error {
 
 	peer := room.getPeer(peerConnectionId)
 
 	for echoStreamIndex := range len(streamer.echoStreams) {
-		err := streamer.echoStreams[echoStreamIndex].outboundTracks.setStreamOnPeer(peer)
+		err := streamer.echoStreams[echoStreamIndex].outboundTracks.setStreamOnPeer(peer, waitGroup)
 		if err != nil {
 			return err
 		}
 	}
 
-	err := streamer.ownStream.outboundTracks.setStreamOnPeer(peer)
+	err := streamer.ownStream.outboundTracks.setStreamOnPeer(peer, waitGroup)
 	if err != nil {
 		return err
 	}
