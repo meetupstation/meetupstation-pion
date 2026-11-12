@@ -316,12 +316,15 @@ func (streamer *Streamer) Bind(remoteTrack *webrtc.TrackRemote) error {
 
 	index := streamer.find(streamId)
 	if index == len(streamer.echoStreams) {
-		for index = range streamer.echoStreams {
-			if streamer.echoStreams[index].remoteStreamId == "" {
-				streamer.echoStreams[index].remoteStreamId = streamId
-				break
+		index = func() int {
+			for index := range streamer.echoStreams {
+				if streamer.echoStreams[index].remoteStreamId == "" {
+					streamer.echoStreams[index].remoteStreamId = streamId
+					return index
+				}
 			}
-		}
+			return len(streamer.echoStreams)
+		}()
 	}
 
 	if index == len(streamer.echoStreams) {
@@ -371,11 +374,11 @@ func (streamer *Streamer) find(streamId string) int {
 	var index int
 	for index = range streamer.echoStreams {
 		if streamer.echoStreams[index].remoteStreamId == streamId {
-			break
+			return index
 		}
 	}
 
-	return index
+	return len(streamer.echoStreams)
 }
 
 func (streamer *Streamer) sendLocal(
