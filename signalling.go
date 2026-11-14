@@ -17,7 +17,6 @@ type SignallingScope struct {
 	id        string
 	accessKey string
 	server    string
-	client    *http.Client
 
 	complete                 bool
 	localSessionDescription  string
@@ -45,7 +44,6 @@ func (room *SignallingScope) init(server string, roomId string) {
 	room.id = roomId
 	room.accessKey = ""
 	room.server = server
-	room.client = &http.Client{Timeout: 5 * time.Second}
 }
 
 func (room *SignallingScope) restart() {
@@ -89,7 +87,9 @@ func (room *SignallingScope) hostPost(
 
 	request.Header.Add("Content-type", "application/json; charset=UTF-8")
 
-	hostSignal, err := room.client.Do(request)
+	client := http.Client{Timeout: 5 * time.Second}
+
+	hostSignal, err := client.Do(request)
 	if err != nil {
 		return err
 	}
@@ -131,7 +131,9 @@ func (room *SignallingScope) hostGet() (bool, error) {
 		return false, err
 	}
 
-	hostSignal, err := room.client.Do(request)
+	client := http.Client{Timeout: 5 * time.Second}
+
+	hostSignal, err := client.Do(request)
 	if err != nil {
 		return false, err
 	}
@@ -191,7 +193,9 @@ func (room *SignallingScope) guestPost(
 
 	request.Header.Add("Content-type", "application/json; charset=UTF-8")
 
-	guestSignal, err := room.client.Do(request)
+	client := http.Client{Timeout: 5 * time.Second}
+
+	guestSignal, err := client.Do(request)
 	if err != nil {
 		return false, err
 	}
@@ -223,7 +227,9 @@ func (room *SignallingScope) guestGet() error {
 		return err
 	}
 
-	guestSignal, err := room.client.Do(request)
+	client := http.Client{Timeout: 5 * time.Second}
+
+	guestSignal, err := client.Do(request)
 	if err != nil {
 		return err
 	}
