@@ -13,6 +13,10 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
+func createClient() http.Client {
+	return http.Client{Timeout: 5 * time.Second}
+}
+
 type SignallingScope struct {
 	id        string
 	accessKey string
@@ -87,7 +91,7 @@ func (room *SignallingScope) hostPost(
 
 	request.Header.Add("Content-type", "application/json; charset=UTF-8")
 
-	client := http.Client{Timeout: 5 * time.Second}
+	client := createClient()
 
 	hostSignal, err := client.Do(request)
 	if err != nil {
@@ -131,7 +135,7 @@ func (room *SignallingScope) hostGet() (bool, error) {
 		return false, err
 	}
 
-	client := http.Client{Timeout: 5 * time.Second}
+	client := createClient()
 
 	hostSignal, err := client.Do(request)
 	if err != nil {
@@ -193,7 +197,7 @@ func (room *SignallingScope) guestPost(
 
 	request.Header.Add("Content-type", "application/json; charset=UTF-8")
 
-	client := http.Client{Timeout: 5 * time.Second}
+	client := createClient()
 
 	guestSignal, err := client.Do(request)
 	if err != nil {
@@ -227,7 +231,7 @@ func (room *SignallingScope) guestGet() error {
 		return err
 	}
 
-	client := http.Client{Timeout: 5 * time.Second}
+	client := createClient()
 
 	guestSignal, err := client.Do(request)
 	if err != nil {
