@@ -52,7 +52,7 @@ func (peer *Peer) onRemoteTrack(track *webrtc.TrackRemote, receiver *webrtc.RTPR
 		track.StreamID(),
 		track.Msid())
 
-	err := peer.streamer.Bind(track)
+	err := peer.streamer.Bind(track, peer.peerConnection)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"Error: conn %d: onRemoteTrack: %v\n",

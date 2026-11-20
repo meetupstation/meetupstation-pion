@@ -145,13 +145,15 @@ func (room *Room) setupTracksAndDataHandlers(
 	peer := room.getPeer(peerConnectionId)
 
 	for echoStreamIndex := range len(streamer.echoStreams) {
-		err := streamer.echoStreams[echoStreamIndex].outboundTracks.setStreamOnPeer(peer, waitGroup)
+		echoStream := streamer.echoStreams[echoStreamIndex]
+		err := echoStream.outboundTracks.
+			setStreamOnPeer(peer, waitGroup, echoStream.onKeyframeRequest)
 		if err != nil {
 			return err
 		}
 	}
 
-	err := streamer.ownStream.outboundTracks.setStreamOnPeer(peer, waitGroup)
+	err := streamer.ownStream.outboundTracks.setStreamOnPeer(peer, waitGroup, nil)
 	if err != nil {
 		return err
 	}

@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 )
@@ -79,7 +80,11 @@ func (outboundTracks *OutboundTracks) init(
 	return nil
 }
 
-func (outboundTracks *OutboundTracks) setStreamOnPeer(peer *Peer, waitGroup *sync.WaitGroup) error {
+func (outboundTracks *OutboundTracks) setStreamOnPeer(
+	peer *Peer,
+	waitGroup *sync.WaitGroup,
+	onKeyframeRequest func(),
+) error {
 
 	rtpCodecTypes := []webrtc.RTPCodecType{
 		webrtc.RTPCodecTypeVideo,
@@ -134,9 +139,19 @@ func (outboundTracks *OutboundTracks) setStreamOnPeer(peer *Peer, waitGroup *syn
 
 		waitGroup.Go(func() {
 			for {
-				_, _, err := transceiver.Sender().ReadRTCP()
+				packets, _, err := transceiver.Sender().ReadRTCP()
 				if err != nil {
 					return
+				}
+				if rtpCodecTypes[index] != webrtc.RTPCodecTypeVideo ||
+					onKeyframeRequest == nil {
+					continue
+				}
+				for _, packet := range packets {
+					switch packet.(type) {
+					case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
+						onKeyframeRequest()
+					}
 				}
 			}
 		})
@@ -146,9 +161,14 @@ func (outboundTracks *OutboundTracks) setStreamOnPeer(peer *Peer, waitGroup *syn
 }
 
 type EchoStream struct {
-	outboundTracks OutboundTracks
-	remoteStreamId atomic.Value
-	remoteTracks   []atomic.Pointer[webrtc.TrackRemote] // 0 - video, 1 - audio
+	outboundTracks       OutboundTracks
+	remoteStreamId       atomic.Value
+	remotePeerConnection atomic.Pointer[webrtc.PeerConnection]
+	remoteTracks         []atomic.Pointer[webrtc.TrackRemote] // 0 - video, 1 - audio
+
+	// videoSource atomic.Pointer[remoteSource]
+	// lastPLI     atomic.Int64
+	keyFrameRequested atomic.Bool
 }
 
 func (echoStream *EchoStream) init(streamName string) error {
@@ -160,6 +180,34 @@ func (echoStream *EchoStream) init(streamName string) error {
 	echoStream.remoteTracks = make([]atomic.Pointer[webrtc.TrackRemote], 2)
 
 	return nil
+}
+
+func (echoStream *EchoStream) onKeyframeRequest() {
+	echoStream.keyFrameRequested.Store(true)
+	// fmt.Fprintf(os.Stdout, "onKeyframeRequest")
+}
+
+func (echoStream *EchoStream) requestKeyframe(
+	peerConnection *webrtc.PeerConnection,
+	track *webrtc.TrackRemote) {
+	if echoStream.keyFrameRequested.CompareAndSwap(true, false) {
+		_ = peerConnection.WriteRTCP([]rtcp.Packet{
+			&rtcp.PictureLossIndication{MediaSSRC: uint32(track.SSRC())},
+		})
+	}
+	// source := echoStream.videoSource.Load()
+	// if source == nil {
+	// 	return
+	// }
+	// now := time.Now().UnixMilli()
+	// last := echoStream.lastPLI.Load()
+	// if now-last < 1000 ||
+	// 	!echoStream.lastPLI.CompareAndSwap(last, now) {
+	// 	return
+	// }
+	// _ = source.peerConnection.WriteRTCP([]rtcp.Packet{
+	// 	&rtcp.PictureLossIndication{MediaSSRC: uint32(source.track.SSRC())},
+	// })
 }
 
 type ReceiveStream struct {
@@ -339,7 +387,9 @@ func (streamer *Streamer) init(
 	return nil
 }
 
-func (streamer *Streamer) Bind(remoteTrack *webrtc.TrackRemote) error {
+func (streamer *Streamer) Bind(
+	remoteTrack *webrtc.TrackRemote,
+	remotePeerConnection *webrtc.PeerConnection) error {
 
 	streamer.mutex.Lock()
 	defer streamer.mutex.Unlock()
@@ -361,12 +411,15 @@ func (streamer *Streamer) Bind(remoteTrack *webrtc.TrackRemote) error {
 	if echoStreamIndex == len(streamer.echoStreams) {
 		return fmt.Errorf("all echo tracks are busy")
 	} else {
+		// fmt.Fprintf(os.Stdout,
+		// 	"streamer.Bind: allocated stream index %d\n", echoStreamIndex)
 		trackIndexMap := map[webrtc.RTPCodecType]int{
 			webrtc.RTPCodecTypeVideo: 0,
 			webrtc.RTPCodecTypeAudio: 1,
 		}
 		trackIndex := trackIndexMap[remoteTrack.Kind()]
 		streamer.echoStreams[echoStreamIndex].remoteTracks[trackIndex].Store(remoteTrack)
+		streamer.echoStreams[echoStreamIndex].remotePeerConnection.Store(remotePeerConnection)
 	}
 
 	return nil
@@ -387,6 +440,9 @@ func (streamer *Streamer) Unbind(remoteTrack *webrtc.TrackRemote) {
 
 	echoStreamIndex := streamer.find(streamId)
 
+	// fmt.Fprintf(os.Stdout,
+	// 	"streamer.Unbind: deallocating stream index %d\n", echoStreamIndex)
+
 	if echoStreamIndex != len(streamer.echoStreams) {
 		streamer.echoStreams[echoStreamIndex].remoteTracks[trackIndex].CompareAndSwap(remoteTrack, nil)
 
@@ -400,6 +456,7 @@ func (streamer *Streamer) Unbind(remoteTrack *webrtc.TrackRemote) {
 
 		if allClosed {
 			streamer.echoStreams[echoStreamIndex].remoteStreamId.CompareAndSwap(streamId, "")
+			streamer.echoStreams[echoStreamIndex].remotePeerConnection.Store(nil)
 		}
 	}
 }
@@ -491,11 +548,17 @@ func (streamer *Streamer) echoRemote(echoStreamIndex int,
 	trackIndex := trackIndexMap[mediaType]
 
 	for running.Load() {
+		echoStream := streamer.echoStreams[echoStreamIndex]
 
-		remoteTrack := streamer.echoStreams[echoStreamIndex].remoteTracks[trackIndex].Load()
+		remoteTrack := echoStream.remoteTracks[trackIndex].Load()
 		if remoteTrack == nil {
 			time.Sleep(time.Second)
 			continue
+		}
+
+		remotePeerConnection := echoStream.remotePeerConnection.Load()
+		if remotePeerConnection != nil {
+			echoStream.requestKeyframe(remotePeerConnection, remoteTrack)
 		}
 
 		var err error = nil
@@ -508,6 +571,7 @@ func (streamer *Streamer) echoRemote(echoStreamIndex int,
 			} else {
 				// this is happening when, the phone power button is pressed
 				// the video stream stops, while audio continues
+				// or simply the peer turns off the camera/mic sharing
 				// fmt.Fprintf(os.Stderr,
 				// 	"remote stream warning: remote track read - %s\n",
 				// 	err)
@@ -517,7 +581,7 @@ func (streamer *Streamer) echoRemote(echoStreamIndex int,
 
 		rebaser.process(packet)
 
-		localTrack := streamer.echoStreams[echoStreamIndex].outboundTracks.localTracks[trackIndex]
+		localTrack := echoStream.outboundTracks.localTracks[trackIndex]
 
 		err = localTrack.WriteRTP(packet)
 		if err != nil {
