@@ -166,9 +166,7 @@ type EchoStream struct {
 	remotePeerConnection atomic.Pointer[webrtc.PeerConnection]
 	remoteTracks         []atomic.Pointer[webrtc.TrackRemote] // 0 - video, 1 - audio
 
-	// videoSource atomic.Pointer[remoteSource]
-	// lastPLI     atomic.Int64
-	keyFrameRequested atomic.Bool
+	lastKeyframeRequest atomic.Int64
 }
 
 func (echoStream *EchoStream) init(streamName string) error {
@@ -183,31 +181,24 @@ func (echoStream *EchoStream) init(streamName string) error {
 }
 
 func (echoStream *EchoStream) onKeyframeRequest() {
-	echoStream.keyFrameRequested.Store(true)
-	// fmt.Fprintf(os.Stdout, "onKeyframeRequest")
-}
+	peerConnection := echoStream.remotePeerConnection.Load()
+	track := echoStream.remoteTracks[0].Load()
 
-func (echoStream *EchoStream) requestKeyframe(
-	peerConnection *webrtc.PeerConnection,
-	track *webrtc.TrackRemote) {
-	if echoStream.keyFrameRequested.CompareAndSwap(true, false) {
-		_ = peerConnection.WriteRTCP([]rtcp.Packet{
-			&rtcp.PictureLossIndication{MediaSSRC: uint32(track.SSRC())},
-		})
+	if peerConnection == nil || track == nil {
+		return
 	}
-	// source := echoStream.videoSource.Load()
-	// if source == nil {
-	// 	return
-	// }
-	// now := time.Now().UnixMilli()
-	// last := echoStream.lastPLI.Load()
-	// if now-last < 1000 ||
-	// 	!echoStream.lastPLI.CompareAndSwap(last, now) {
-	// 	return
-	// }
-	// _ = source.peerConnection.WriteRTCP([]rtcp.Packet{
-	// 	&rtcp.PictureLossIndication{MediaSSRC: uint32(source.track.SSRC())},
-	// })
+
+	now := time.Now().UnixMilli()
+	last := echoStream.lastKeyframeRequest.Load()
+
+	if now-last < 1000 ||
+		!echoStream.lastKeyframeRequest.CompareAndSwap(last, now) {
+		return
+	}
+
+	_ = peerConnection.WriteRTCP([]rtcp.Packet{
+		&rtcp.PictureLossIndication{MediaSSRC: uint32(track.SSRC())},
+	})
 }
 
 type ReceiveStream struct {
@@ -420,6 +411,9 @@ func (streamer *Streamer) Bind(
 		trackIndex := trackIndexMap[remoteTrack.Kind()]
 		streamer.echoStreams[echoStreamIndex].remoteTracks[trackIndex].Store(remoteTrack)
 		streamer.echoStreams[echoStreamIndex].remotePeerConnection.Store(remotePeerConnection)
+		if trackIndex == 0 {
+			streamer.echoStreams[echoStreamIndex].lastKeyframeRequest.Store(0)
+		}
 	}
 
 	return nil
@@ -554,11 +548,6 @@ func (streamer *Streamer) echoRemote(echoStreamIndex int,
 		if remoteTrack == nil {
 			time.Sleep(time.Second)
 			continue
-		}
-
-		remotePeerConnection := echoStream.remotePeerConnection.Load()
-		if remotePeerConnection != nil {
-			echoStream.requestKeyframe(remotePeerConnection, remoteTrack)
 		}
 
 		var err error = nil
