@@ -181,6 +181,7 @@ func (echoStream *EchoStream) init(streamName string) error {
 }
 
 func (echoStream *EchoStream) onKeyframeRequest() {
+	// fmt.Fprintln(os.Stdout, "onKeyframeRequest")
 	peerConnection := echoStream.remotePeerConnection.Load()
 	track := echoStream.remoteTracks[0].Load()
 
@@ -196,9 +197,12 @@ func (echoStream *EchoStream) onKeyframeRequest() {
 		return
 	}
 
-	_ = peerConnection.WriteRTCP([]rtcp.Packet{
-		&rtcp.PictureLossIndication{MediaSSRC: uint32(track.SSRC())},
-	})
+	_ = peerConnection.WriteRTCP(
+		[]rtcp.Packet{
+			&rtcp.PictureLossIndication{MediaSSRC: uint32(track.SSRC())},
+		},
+	)
+	// fmt.Fprintln(os.Stdout, "onKeyframeRequest!")
 }
 
 type ReceiveStream struct {
